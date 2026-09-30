@@ -60,6 +60,38 @@ describe("server env", () => {
     ).toThrow(/CLERK_SECRET_KEY/);
   });
 
+  it("trims values, including the model name", () => {
+    expect(parseServer({ OPENROUTER_MODEL: " openrouter/free\n" }).OPENROUTER_MODEL).toBe("openrouter/free");
+  });
+
+  it.each(["postgres://u:p@h:5432/d", "postgresql://u:p@h/d?sslmode=require"])("accepts database URL %s", (url) => {
+    expect(parseServer({ DATABASE_URL: url }).DATABASE_URL).toBe(url);
+  });
+
+  it("does not leak the database password in errors", () => {
+    expect(() => parseServer({ DATABASE_URL: "postgresql://magica:SECRETPW@:bad" })).toThrow(/^(?!.*SECRETPW)/s);
+  });
+
+  it.each([
+    ["http://localhost:3001/", "http://localhost:3001"],
+    ["http://localhost:3001/app?x=1", "http://localhost:3001"],
+    ["https://magica.example.com", "https://magica.example.com"],
+  ])("normalises FRONTEND_ORIGIN %s to an exact origin", (input, expected) => {
+    expect(parseServer({ FRONTEND_ORIGIN: input }).FRONTEND_ORIGIN).toBe(expected);
+  });
+
+  it.each(["ftp://x.com", "localhost:3001", "not a url"])("rejects FRONTEND_ORIGIN %s", (origin) => {
+    expect(() => parseServer({ FRONTEND_ORIGIN: origin })).toThrow(/FRONTEND_ORIGIN/);
+  });
+
+  it.each(["3000000000", "30,000,000", "0", "-5", "1.5"])("rejects CREDIT_STARTING_BALANCE=%s", (v) => {
+    expect(() => parseServer({ CREDIT_STARTING_BALANCE: v })).toThrow(/CREDIT_STARTING_BALANCE/);
+  });
+
+  it("accepts the largest Postgres INTEGER balance", () => {
+    expect(parseServer({ CREDIT_STARTING_BALANCE: "2147483647" }).CREDIT_STARTING_BALANCE).toBe(2_147_483_647);
+  });
+
   it("rejects an admission hold larger than the starting balance", () => {
     expect(() => parseServer({ CREDIT_STARTING_BALANCE: "100", CREDIT_ADMISSION_HOLD: "101" })).toThrow(
       /CREDIT_ADMISSION_HOLD/,

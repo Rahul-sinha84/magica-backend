@@ -1,5 +1,12 @@
 import { defineConfig } from "vitest/config";
 
+// Lets TEST_DATABASE_URL from .env.local reach the config below (Node >= 22 built-in; the file is optional).
+try {
+  process.loadEnvFile(".env.local");
+} catch {
+  /* no .env.local: fall back to the docker defaults */
+}
+
 // `source` makes `#src/*` resolve to TypeScript sources instead of dist/.
 const resolve = { conditions: ["source"] };
 
