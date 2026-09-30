@@ -36,15 +36,20 @@ export async function listMessages(
   const ids = page.map((m) => m.id);
   const runs = await db.agentRun.findMany({
     where: { OR: [{ assistantMessageId: { in: ids } }, { triggerMessageId: { in: ids } }] },
-    select: { id: true, assistantMessageId: true, triggerMessageId: true, createdAt: true },
+    select: { id: true, assistantMessageId: true, triggerMessageId: true, createdAt: true, errorMessage: true },
     orderBy: { createdAt: "asc" }, // later runs overwrite earlier ones below
   });
   const runOf = new Map<string, string>();
+  const failureOf = new Map<string, string>();
   for (const run of runs) {
     runOf.set(run.triggerMessageId, run.id);
     runOf.set(run.assistantMessageId, run.id);
+    if (run.errorMessage) failureOf.set(run.assistantMessageId, run.errorMessage);
   }
 
-  const messages: Message[] = page.reverse().map((row) => serializeMessage(row, runOf.get(row.id) ?? null));
+  // the reason is only ever shown on a reply that actually failed
+  const messages: Message[] = page
+    .reverse()
+    .map((row) => serializeMessage(row, runOf.get(row.id) ?? null, row.status === "FAILED" ? (failureOf.get(row.id) ?? null) : null));
   return { messages, cursor: rows.length > limit && oldest ? encodeCursor([oldest.createdAt.toISOString(), oldest.id]) : null };
 }

@@ -1,4 +1,5 @@
 import { auth, configure, runs, tasks } from "@trigger.dev/sdk";
+import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
 import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
 
@@ -6,18 +7,10 @@ import { logger } from "#src/lib/logger.js";
 
 configure({ secretKey: env.TRIGGER_SECRET_KEY });
 
-export const AGENT_TASK_ID = "agent-turn";
 const TOKEN_TTL_MS = 60 * 60_000;
 const CALL_TIMEOUT_MS = 8_000;
 
-/** What the agent task receives. It loads everything else (messages, history) from the database by these ids. */
-export interface AgentTurnPayload {
-  agentRunId: string;
-  chatId: string;
-  userId: string;
-  assistantMessageId: string;
-  traceId: string;
-}
+export { AGENT_TASK_ID, type AgentTurnPayload };
 
 async function withTimeout<T>(work: Promise<T>, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;

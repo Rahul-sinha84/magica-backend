@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
-import type { AgentTurnPayload } from "#src/lib/trigger.js";
+import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
 
 // Stands in for src/lib/trigger.ts. It behaves like Trigger.dev where it matters: the same idempotency key always
 // gives the same run, and it can be told to fail, hang, or accept a run and then report an error.
@@ -33,7 +33,7 @@ export function resetTriggerMock() {
 }
 
 export const triggerModule = {
-  AGENT_TASK_ID: "agent-turn",
+  AGENT_TASK_ID,
 
   dispatchAgentTurn: vi.fn(async (payload: AgentTurnPayload, key: string): Promise<string> => {
     if (trigger.dispatchHangs) return new Promise<never>(() => {});

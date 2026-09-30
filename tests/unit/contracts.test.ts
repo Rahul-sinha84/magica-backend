@@ -264,6 +264,13 @@ describe("messages", () => {
     expect(MessageSchema.safeParse({ ...message, agentRunId: null, clientMessageId: null }).success).toBe(true);
   });
 
+  it("accepts an optional failure reason, and still parses a message without one", () => {
+    expect(MessageSchema.safeParse({ ...message, errorMessage: "The agent took too long. Please try again." }).success).toBe(true);
+    expect(MessageSchema.safeParse({ ...message, errorMessage: null }).success).toBe(true);
+    expect(MessageSchema.safeParse(message).success).toBe(true);
+    expect(MessageSchema.safeParse({ ...message, errorMessage: 5 }).success).toBe(false);
+  });
+
   it.each(["BOT", "user", ""])("rejects role %j", (role) => {
     expect(MessageSchema.safeParse({ ...message, role }).success).toBe(false);
   });

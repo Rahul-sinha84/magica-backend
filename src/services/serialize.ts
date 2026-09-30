@@ -11,8 +11,11 @@ export const serializeChat = (row: ChatRow): Chat => ({
   lastMessageAt: row.lastMessageAt.toISOString(),
 });
 
-/** `agentRunId` is the run this turn belongs to: the one a user message started, or the one that produced a reply. */
-export const serializeMessage = (row: MessageRow, agentRunId: string | null): Message => ({
+/**
+ * `agentRunId` is the run this turn belongs to: the one a user message started, or the one that produced a reply.
+ * `errorMessage` is why that run failed (only ever given for a failed reply).
+ */
+export const serializeMessage = (row: MessageRow, agentRunId: string | null, errorMessage: string | null = null): Message => ({
   id: row.id,
   chatId: row.chatId,
   role: row.role,
@@ -23,4 +26,5 @@ export const serializeMessage = (row: MessageRow, agentRunId: string | null): Me
   createdAt: row.createdAt.toISOString(),
   agentRunId,
   clientMessageId: row.clientMessageId,
+  errorMessage,
 });

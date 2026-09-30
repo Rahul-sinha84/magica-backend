@@ -101,6 +101,8 @@ export const MessageSchema = z.object({
   agentRunId: z.string().nullable().optional(),
   // chosen by the client when sending, so an optimistic message can be matched to its server copy
   clientMessageId: z.string().nullable().optional(),
+  // why a reply failed, in words that are safe to show; null/absent on everything that did not fail
+  errorMessage: z.string().nullable().optional(),
 });
 
 // The text is stored exactly as typed (indentation and code blocks matter), so it is only checked for
