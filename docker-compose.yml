@@ -1,0 +1,3 @@
+# Convenience wrapper so `docker compose` works from the repo root.
+include:
+  - docker/docker-compose.yml
