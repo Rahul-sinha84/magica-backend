@@ -6,6 +6,7 @@ import { finalizeRun } from "#src/services/runs.js";
 import { as } from "../helpers/app.js";
 import { activeTurn, fixtures, resetDb } from "../helpers/db.js";
 import { trigger, triggerModule } from "../helpers/triggerMock.js";
+import { START_TIMEOUT_MS } from "#src/services/reconcile.js";
 import { createApp } from "#src/app.js";
 import { api } from "../helpers/http.js";
 
@@ -261,7 +262,7 @@ describe("credits", () => {
 
 describe("credits held by runs that are really dead", () => {
   // the user can afford exactly one run, and one of their other chats holds that credit
-  async function poorUserWithARunElsewhere(run: { triggerRunId: string; quietMs: number; ageMs: number }) {
+  async function poorUserWithARunElsewhere(run: { triggerRunId: string; quietMs: number; ageMs: number; status?: "PENDING" | "RUNNING" }) {
     const user = await fixtures.user({ id: "u1", balance: HOLD });
     const busy = await fixtures.chat(user.id);
     const target = await fixtures.chat(user.id);
@@ -276,6 +277,12 @@ describe("credits held by runs that are really dead", () => {
     expect(res.status).toBe(201);
     expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: turn.run.id } })).toMatchObject({ status: "FAILED", errorCode: "AGENT_CRASHED" });
     expect(await credits("u1")).toEqual({ balance: HOLD, held: HOLD }); // only the new run holds credits now
+  });
+
+  it("also frees credits held by a run nobody ever picked up", async () => {
+    const { target } = await poorUserWithARunElsewhere({ triggerRunId: "run_never_started", quietMs: START_TIMEOUT_MS, ageMs: START_TIMEOUT_MS + 5_000, status: "PENDING" });
+    trigger.statuses.set("run_never_started", "QUEUED");
+    expect((await send("u1", target.id, { content: "there is room again" })).status).toBe(201);
   });
 
   it("does not take credits from a run that is alive", async () => {
@@ -382,6 +389,16 @@ describe("one active run per chat", () => {
     const first = sent(await send("u1", chat, { content: "first" }));
     trigger.statuses.set(first.triggerRunId, null);
     expect((await send("u1", chat, { content: "second" })).status).toBe(409);
+  });
+
+  it("clears a run that nobody ever picked up, instead of making the user wait out the time limit", async () => {
+    const user = await fixtures.user({ id: "u1", balance: START });
+    const chat = await fixtures.chat(user.id);
+    const stuck = await activeTurn(chat.id, user.id, { status: "PENDING", triggerRunId: "run_never_started", ageMs: START_TIMEOUT_MS + 5_000, quietMs: START_TIMEOUT_MS });
+    trigger.statuses.set("run_never_started", "PENDING_VERSION");
+
+    expect((await send("u1", chat.id, { content: "now?" })).status).toBe(201);
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: stuck.run.id } })).toMatchObject({ status: "FAILED", errorCode: "AGENT_NOT_STARTED" });
   });
 
   it("lets different chats run at once", async () => {
