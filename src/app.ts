@@ -7,12 +7,13 @@ import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
 import { corsMiddleware } from "#src/middleware/cors.js";
 import { errorHandler, notFound } from "#src/middleware/errorHandler.js";
-import { createApiRateLimit } from "#src/middleware/rateLimit.js";
+import { createApiRateLimit, type ApiLimits } from "#src/middleware/rateLimit.js";
 import { requestContext } from "#src/middleware/requestContext.js";
+import { chatsRouter } from "#src/routes/chats.js";
 import { creditsRouter } from "#src/routes/credits.js";
 import { healthRouter } from "#src/routes/health.js";
 
-export function createApp({ log = logger }: { log?: Logger } = {}): Express {
+export function createApp({ log = logger, rateLimits }: { log?: Logger; rateLimits?: ApiLimits } = {}): Express {
   const app = express();
   app.set("trust proxy", env.TRUST_PROXY);
 
@@ -31,10 +32,11 @@ export function createApp({ log = logger }: { log?: Logger } = {}): Express {
       next();
     },
     clerkAuth(),
-    createApiRateLimit(),
+    createApiRateLimit(rateLimits),
     requireUser,
     express.json({ limit: "1mb" }),
   );
+  app.use("/api/chats", chatsRouter);
   app.use("/api/credits", creditsRouter);
 
   app.use(notFound);

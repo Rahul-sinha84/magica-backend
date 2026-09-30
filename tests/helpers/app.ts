@@ -1,7 +1,9 @@
 import { createApp } from "#src/app.js";
 import { api } from "./http.js";
 
-export const app = createApp();
+// Generous limits: the suite makes far more requests than one real user would in a minute. The limiter itself is
+// tested separately (tests/unit/rateLimit.test.ts and "rate limiting" in core.test.ts).
+export const app = createApp({ rateLimits: { authenticated: 1_000_000, anonymous: 1_000_000 } });
 
 /** Requests made as a signed-in test user (see clerkMock.ts). */
 export function as(userId: string) {

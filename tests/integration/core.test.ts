@@ -450,3 +450,42 @@ describe("the access log", () => {
     expect(JSON.stringify(lines)).not.toContain("authorization");
   });
 });
+
+describe("rate limiting in the full app", () => {
+  const limited = () => createApp({ rateLimits: { authenticated: 3, anonymous: 2, windowMs: 60_000 } });
+
+  it("limits each signed-in user separately and answers 429 in the standard shape", async () => {
+    const tight = limited();
+    const codes: number[] = [];
+    for (let i = 0; i < 5; i++) codes.push((await api(tight).get("/api/credits").set("Authorization", "Bearer test:u1")).status);
+    expect(codes).toEqual([200, 200, 200, 429, 429]);
+
+    const blocked = await api(tight).get("/api/credits").set("Authorization", "Bearer test:u1");
+    expect(ErrorResponseSchema.parse(blocked.body)).toMatchObject({ code: "RATE_LIMITED" });
+    expect(Number(blocked.headers["retry-after"])).toBeGreaterThan(0);
+    expect((await api(tight).get("/api/credits").set("Authorization", "Bearer test:u2")).status).toBe(200);
+  });
+
+  it("counts requests with no valid session per IP, at the lower allowance, before any database work", async () => {
+    const tight = limited();
+    const codes: number[] = [];
+    for (let i = 0; i < 4; i++) codes.push((await api(tight).get("/api/credits")).status);
+    expect(codes).toEqual([401, 401, 429, 429]);
+    expect(await prisma.user.count()).toBe(0);
+  });
+
+  it("never limits the health check", async () => {
+    const tight = limited();
+    const codes = await Promise.all(Array.from({ length: 20 }, () => api(tight).get("/api/health").then((r) => r.status)));
+    expect(codes.every((code) => code === 200)).toBe(true);
+  });
+
+  it("lets a CORS preflight through without counting it", async () => {
+    const tight = limited();
+    for (let i = 0; i < 10; i++) {
+      const res = await api(tight).options("/api/credits").set("Origin", "http://localhost:3001").set("Access-Control-Request-Method", "GET");
+      expect(res.status).toBe(204);
+    }
+    expect((await api(tight).get("/api/credits")).status).toBe(401); // the anonymous allowance is untouched
+  });
+});
