@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "src/generated"] },
+  { ignores: ["dist", "coverage", "src/generated", "tests/.tmp"] },
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
   {
@@ -11,7 +11,7 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/consistent-type-imports": "error",
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", ignoreRestSiblings: true }],
     },
   },
   { files: ["**/*.{js,mjs}"], extends: [tseslint.configs.disableTypeChecked] },
