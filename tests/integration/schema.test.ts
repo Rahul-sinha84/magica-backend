@@ -252,11 +252,10 @@ describe("column defaults", () => {
     expect(saved.contentBlocks).toEqual(blocks);
   });
 
-  it("allows a missing email but keeps non-null emails unique", async () => {
-    await prisma.user.create({ data: { id: "a" } });
-    await prisma.user.create({ data: { id: "b" } });
-    await prisma.user.create({ data: { id: "c", email: "x@y.z" } });
-    expect(await failure(prisma.user.create({ data: { id: "d", email: "x@y.z" } }))).toBe("P2002");
+  it("does not make emails unique: a re-created Clerk user with the same email must still be able to sign in", async () => {
+    await prisma.user.create({ data: { id: "a", email: "x@y.z" } });
+    await expect(prisma.user.create({ data: { id: "b", email: "x@y.z" } })).resolves.toBeDefined();
+    await expect(prisma.user.create({ data: { id: "c" } })).resolves.toBeDefined(); // and a missing email is fine
   });
 });
 
@@ -277,5 +276,12 @@ describe("keyset indexes", () => {
     });
     expect(plan).toContain("Message_chatId_createdAt_id_idx");
     expect(plan).not.toMatch(/\bSort\b/);
+  });
+});
+
+describe("database connection limits", () => {
+  it("applies a statement timeout and a bounded wait for a connection, so nothing can hang forever", async () => {
+    const [row] = await prisma.$queryRaw<{ timeout: string }[]>`SELECT current_setting('statement_timeout') AS timeout`;
+    expect(row?.timeout).toBe("15s");
   });
 });

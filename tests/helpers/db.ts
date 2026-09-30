@@ -1,5 +1,7 @@
+import { clearUserCache } from "#src/auth/users.js";
 import { prisma } from "#src/db/client.js";
 import { env } from "#src/env/base.js";
+import { resetClerkMock } from "./clerkMock.js";
 import { assertTestDatabase } from "./guard.js";
 
 const TABLES = ["CreditLedger", "ToolInvocation", "AgentRun", "Message", "Chat", "User"] as const;
@@ -7,6 +9,8 @@ const TABLES = ["CreditLedger", "ToolInvocation", "AgentRun", "Message", "Chat",
 export async function resetDb(): Promise<void> {
   assertTestDatabase(env.DATABASE_URL);
   await prisma.$executeRawUnsafe(`TRUNCATE ${TABLES.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
+  clearUserCache(); // the users it remembered no longer exist
+  resetClerkMock();
 }
 
 let counter = 0;

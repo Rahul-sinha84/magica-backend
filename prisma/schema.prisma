@@ -18,7 +18,7 @@ datasource db {
 
 model User {
   id        String   @id // Clerk user id
-  email     String?  @unique
+  email     String? // informational only: identity is the Clerk id, so this is deliberately not unique
   balance   Int      @default(0) // total credits; available = balance - held
   held      Int      @default(0) // credits reserved by in-flight runs
   createdAt DateTime @default(now())

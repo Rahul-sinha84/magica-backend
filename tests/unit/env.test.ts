@@ -92,6 +92,15 @@ describe("server env", () => {
     expect(parseServer({ CREDIT_STARTING_BALANCE: "2147483647" }).CREDIT_STARTING_BALANCE).toBe(2_147_483_647);
   });
 
+  it.each([["0", 0], ["1", 1], ["10", 10]])("accepts TRUST_PROXY=%s", (value, expected) => {
+    expect(parseServer({ TRUST_PROXY: value }).TRUST_PROXY).toBe(expected);
+  });
+
+  it("defaults TRUST_PROXY to 0 (no proxy) and rejects nonsense", () => {
+    expect(parseServer().TRUST_PROXY).toBe(0);
+    for (const bad of ["-1", "11", "yes", "1.5"]) expect(() => parseServer({ TRUST_PROXY: bad })).toThrow(/TRUST_PROXY/);
+  });
+
   it("rejects an admission hold larger than the starting balance", () => {
     expect(() => parseServer({ CREDIT_STARTING_BALANCE: "100", CREDIT_ADMISSION_HOLD: "101" })).toThrow(
       /CREDIT_ADMISSION_HOLD/,

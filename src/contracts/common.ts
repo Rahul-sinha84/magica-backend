@@ -10,6 +10,7 @@ export const ErrorCodeSchema = z.enum([
   "NOT_FOUND", // 404 (also used for other users' resources, so nothing leaks)
   "RUN_ACTIVE", // 409: the chat already has a run in flight
   "INSUFFICIENT_CREDITS", // 402
+  "PAYLOAD_TOO_LARGE", // 413
   "RATE_LIMITED", // 429
   "SERVICE_UNAVAILABLE", // 503
   "INTERNAL_ERROR", // 500

@@ -352,6 +352,7 @@ describe("errors and credits", () => {
   it("keeps error as a plain string and adds a code", () => {
     expect(ErrorResponseSchema.safeParse({ error: "Not found", code: "NOT_FOUND" }).success).toBe(true);
     expect(ErrorResponseSchema.safeParse({ error: "x", code: "RUN_ACTIVE", details: { runId: "r1" } }).success).toBe(true);
+    expect(ErrorResponseSchema.safeParse({ error: "Too big", code: "PAYLOAD_TOO_LARGE" }).success).toBe(true);
     expect(ErrorResponseSchema.safeParse({ error: { message: "nested" }, code: "NOT_FOUND" }).success).toBe(false);
     expect(ErrorResponseSchema.safeParse({ error: "x", code: "MADE_UP" }).success).toBe(false);
   });

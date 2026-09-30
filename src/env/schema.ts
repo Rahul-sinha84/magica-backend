@@ -20,6 +20,8 @@ export const BaseEnvSchema = z.object({
 export const ServerEnvSchema = BaseEnvSchema.extend({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   // Normalised to a bare origin: browsers send `Origin` without a trailing slash or path, so CORS must match exactly.
+  // How many reverse proxies sit in front (0 = none). Needed so rate limiting sees the real client IP.
+  TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
   FRONTEND_ORIGIN: z
     .url({ protocol: /^https?$/ })
     .transform((u) => new URL(u).origin)
