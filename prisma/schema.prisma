@@ -1,0 +1,180 @@
+// Day 1 core tables. Attachment / RunSkill / Waitpoint arrive on Day 2 as an additive migration.
+//
+// Constraints Prisma cannot express live as raw SQL at the end of the init migration:
+//   - AgentRun_one_active_per_chat: partial unique index (one PENDING/RUNNING run per chat)
+//   - User_credits_valid: CHECK (balance >= 0 AND held >= 0 AND held <= balance)
+//   - CreditLedger_amount_nonzero: CHECK (amount <> 0)
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id // Clerk user id
+  email     String?  @unique
+  balance   Int      @default(0) // total credits; available = balance - held
+  held      Int      @default(0) // credits reserved by in-flight runs
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chats        Chat[]
+  messages     Message[]
+  agentRuns    AgentRun[]
+  creditLedger CreditLedger[]
+}
+
+model Chat {
+  id            String   @id @default(cuid())
+  userId        String
+  title         String   @default("New chat")
+  isPinned      Boolean  @default(false)
+  lastMessageAt DateTime @default(now()) // never null, so keyset ordering is total
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  Message[]
+  agentRuns AgentRun[]
+
+  @@index([userId, isPinned(sort: Desc), lastMessageAt(sort: Desc), id(sort: Desc)])
+}
+
+model Message {
+  id              String        @id @default(cuid())
+  chatId          String
+  userId          String
+  role            MessageRole
+  status          MessageStatus @default(COMPLETED)
+  content         String?
+  contentBlocks   Json          @default("[]") // ContentBlock[]; validated with Zod on write
+  clientMessageId String? // client idempotency key
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  chat          Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggeredRuns AgentRun[] @relation("TriggerMessage")
+  assistantRun  AgentRun?  @relation("AssistantMessage")
+
+  @@unique([chatId, clientMessageId]) // NULLs are distinct, so only client-supplied keys collide
+  @@index([chatId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model AgentRun {
+  id                 String    @id @default(cuid())
+  chatId             String
+  userId             String
+  triggerMessageId   String // the USER message that started this run
+  assistantMessageId String    @unique // the ASSISTANT message this run produces
+  triggerRunId       String?   @unique // Trigger.dev run id, set after dispatch
+  status             RunStatus @default(PENDING)
+  errorCode          String?
+  errorMessage       String? // user-safe
+  model              String? // the model OpenRouter actually routed to
+  inputTokens        Int?
+  outputTokens       Int?
+  traceId            String
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  chat             Chat             @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggerMessage   Message          @relation("TriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
+  assistantMessage Message          @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  toolInvocations  ToolInvocation[]
+  creditLedger     CreditLedger[]
+
+  @@index([chatId, createdAt(sort: Desc)])
+  @@index([triggerMessageId])
+}
+
+model ToolInvocation {
+  id           String               @id @default(cuid())
+  agentRunId   String
+  toolCallId   String // model-generated tool call id
+  toolName     String
+  status       ToolInvocationStatus @default(PENDING)
+  input        Json
+  output       Json?
+  errorMessage String?
+  magicaRunId  String? // external run id (Day 2)
+  creditCost   Int?
+  durationMs   Int?
+  dispatchedAt DateTime? // set BEFORE the external call: tells "never sent" from "sent, outcome unknown"
+  completedAt  DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+
+  @@unique([agentRunId, toolCallId])
+}
+
+// Signed amount, from the point of view of the counter it changes:
+//   GRANT +n / REFUND +n  -> User.balance
+//   CHARGE -n             -> User.balance
+//   HOLD +n / RELEASE -n  -> User.held
+model CreditLedger {
+  id             String     @id @default(cuid())
+  userId         String
+  agentRunId     String?
+  type           LedgerType
+  amount         Int
+  reason         String
+  idempotencyKey String     @unique
+  createdAt      DateTime   @default(now())
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentRun AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([agentRunId])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum MessageStatus {
+  COMPLETED
+  FAILED
+  CANCELLED
+  STREAMING
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ToolInvocationStatus {
+  PENDING
+  DISPATCHING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum LedgerType {
+  GRANT
+  HOLD
+  RELEASE
+  CHARGE
+  REFUND
+}
