@@ -1,8 +1,8 @@
 import { defineConfig } from "vitest/config";
 import { TEST_DATABASE_URL } from "./tests/helpers/guard.js";
 
-// `source` makes `#src/*` resolve to TypeScript sources instead of dist/.
-const resolve = { conditions: ["source"] };
+// `magica-source` makes `#src/*` resolve to TypeScript sources instead of dist/.
+const resolve = { conditions: ["magica-source"] };
 
 export default defineConfig({
   resolve,

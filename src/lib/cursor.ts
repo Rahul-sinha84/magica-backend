@@ -5,6 +5,9 @@ import { AppError } from "#src/lib/errors.js";
 // served. A client can only hand one back, and a forged one can only change where in *its own* rows the next page
 // starts (every query is also scoped to the caller), so it is validated strictly but needs no signature.
 
+/** Ids are cuids. Anything else (another length, NUL, unicode, path tricks) cannot exist in the database. */
+export const IdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+
 export const encodeCursor = (payload: readonly unknown[]): string => Buffer.from(JSON.stringify(payload)).toString("base64url");
 
 /** A timestamp from a cursor. Bounded, because the database rejects dates such as year 0000 (a 500 otherwise). */

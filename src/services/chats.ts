@@ -2,7 +2,9 @@ import { z } from "zod";
 import { prisma, Prisma } from "#src/db/client.js";
 import type { ChatListQuerySchema, ChatListResponseSchema, UpdateChatBody } from "#src/contracts/index.js";
 import { AppError } from "#src/lib/errors.js";
-import { CursorTimestampSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
+import { CursorTimestampSchema, IdSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
+import { cancelTriggerRun } from "#src/lib/trigger.js";
+import { ACTIVE_STATUSES, finalizeRun } from "#src/services/runs.js";
 import { serializeChat } from "#src/services/serialize.js";
 
 type ChatListQuery = z.infer<typeof ChatListQuerySchema>;
@@ -11,16 +13,15 @@ type ChatListResponse = z.infer<typeof ChatListResponseSchema>;
 const chatNotFound = () => new AppError("NOT_FOUND", "Chat not found.");
 const isMissingRow = (error: unknown) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025";
 
-/** Ids are cuids. Anything else (another length, NUL, unicode, path tricks) cannot exist, so it is simply not found. */
-export const ChatIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+/** An id that cannot exist (wrong length or characters) is simply not found. */
 export const parseChatId = (value: unknown): string => {
-  const id = ChatIdSchema.safeParse(value);
+  const id = IdSchema.safeParse(value);
   if (!id.success) throw chatNotFound();
   return id.data;
 };
 
 // the id inside a cursor is held to the same rule as any chat id, so nothing the database would reject can get through
-const ChatCursorSchema = z.tuple([z.union([z.literal(0), z.literal(1)]), CursorTimestampSchema, ChatIdSchema]);
+const ChatCursorSchema = z.tuple([z.union([z.literal(0), z.literal(1)]), CursorTimestampSchema, IdSchema]);
 
 /** The caller's chat, or 404. Another user's chat and a chat that does not exist are indistinguishable. */
 export async function requireChat(userId: string, chatId: string) {
@@ -67,11 +68,23 @@ export async function updateChat(userId: string, chatId: string, data: UpdateCha
   }
 }
 
-// Phase 5 adds "stop the chat's active run and release its credit hold" before this delete.
+/**
+ * Deleting a chat first stops its agent (if one is running) and gives the credit hold back.
+ *
+ * The chat row is locked before looking for the run. A send takes a shared lock on the chat row to write its messages,
+ * so either the send finishes first (and this sees and ends its run) or this finishes first (and the send fails as
+ * "chat not found"). Without the lock a run created in between would be deleted along with the chat, with its
+ * credits still held.
+ */
 export async function deleteChat(userId: string, chatId: string): Promise<void> {
-  try {
-    await prisma.chat.delete({ where: { id: chatId, userId } });
-  } catch (error) {
-    throw isMissingRow(error) ? chatNotFound() : error;
-  }
+  let running: { id: string; triggerRunId: string | null } | null = null;
+  await prisma.$transaction(async (tx) => {
+    const owned = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Chat" WHERE id = ${chatId} AND "userId" = ${userId} FOR UPDATE`;
+    if (owned.length === 0) throw chatNotFound();
+    running = await tx.agentRun.findFirst({ where: { chatId, status: { in: [...ACTIVE_STATUSES] } }, select: { id: true, triggerRunId: true } });
+    if (running) await finalizeRun(running.id, { status: "CANCELLED" }, tx);
+    await tx.chat.delete({ where: { id: chatId } });
+  });
+  const stopped = running as { triggerRunId: string | null } | null; // assigned inside the transaction callback
+  if (stopped?.triggerRunId) await cancelTriggerRun(stopped.triggerRunId); // after the delete, so a slow Trigger.dev never blocks it
 }

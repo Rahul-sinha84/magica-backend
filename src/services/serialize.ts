@@ -1,5 +1,5 @@
-import type { Chat } from "#src/contracts/index.js";
-import type { Chat as ChatRow } from "#src/generated/prisma/client.js";
+import { ContentBlocksSchema, type Chat, type Message } from "#src/contracts/index.js";
+import type { Chat as ChatRow, Message as MessageRow } from "#src/generated/prisma/client.js";
 
 export const serializeChat = (row: ChatRow): Chat => ({
   id: row.id,
@@ -9,4 +9,18 @@ export const serializeChat = (row: ChatRow): Chat => ({
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
   lastMessageAt: row.lastMessageAt.toISOString(),
+});
+
+/** `agentRunId` is the run this turn belongs to: the one a user message started, or the one that produced a reply. */
+export const serializeMessage = (row: MessageRow, agentRunId: string | null): Message => ({
+  id: row.id,
+  chatId: row.chatId,
+  role: row.role,
+  content: row.content,
+  // the column is JSON, so whatever is in it is read the way the client reads it: bad blocks dropped, never a crash
+  contentBlocks: ContentBlocksSchema.parse(Array.isArray(row.contentBlocks) ? row.contentBlocks : []),
+  status: row.status,
+  createdAt: row.createdAt.toISOString(),
+  agentRunId,
+  clientMessageId: row.clientMessageId,
 });

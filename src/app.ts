@@ -7,13 +7,15 @@ import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
 import { corsMiddleware } from "#src/middleware/cors.js";
 import { errorHandler, notFound } from "#src/middleware/errorHandler.js";
-import { createApiRateLimit, type ApiLimits } from "#src/middleware/rateLimit.js";
+import { createApiRateLimit, createMessageSendRateLimit, type ApiLimits } from "#src/middleware/rateLimit.js";
 import { requestContext } from "#src/middleware/requestContext.js";
 import { chatsRouter } from "#src/routes/chats.js";
+import { messagesRouter } from "#src/routes/messages.js";
+import { runsRouter } from "#src/routes/runs.js";
 import { creditsRouter } from "#src/routes/credits.js";
 import { healthRouter } from "#src/routes/health.js";
 
-export function createApp({ log = logger, rateLimits }: { log?: Logger; rateLimits?: ApiLimits } = {}): Express {
+export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number } = {}): Express {
   const app = express();
   app.set("trust proxy", env.TRUST_PROXY);
 
@@ -36,7 +38,9 @@ export function createApp({ log = logger, rateLimits }: { log?: Logger; rateLimi
     requireUser,
     express.json({ limit: "1mb" }),
   );
+  app.use("/api/chats/:chatId/messages", messagesRouter(createMessageSendRateLimit(sendLimit === undefined ? {} : { limit: sendLimit })));
   app.use("/api/chats", chatsRouter);
+  app.use("/api", runsRouter);
   app.use("/api/credits", creditsRouter);
 
   app.use(notFound);
