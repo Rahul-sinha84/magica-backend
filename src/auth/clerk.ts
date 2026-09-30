@@ -32,24 +32,35 @@ const BEARER = /^Bearer\s+([A-Za-z0-9._~+/=-]{1,8192})$/i; // the characters a J
 const VERIFY_URL = "http://api.invalid/"; // only there to build a Request; Clerk never contacts it
 const signedIn = new WeakMap<Request, string | null>();
 
+// Verifying a token is local most of the time, but Clerk fetches its signing keys over the network now and then; a hung
+// fetch must not hang the request with it.
+export const VERIFY_TIMEOUT_MS = 8_000;
+
 const unavailable = () => new AppError("SERVICE_UNAVAILABLE", "We couldn't verify your sign-in right now. Please try again in a moment.");
 
 /** Verifies the Bearer token and records who it belongs to. Never rejects a request itself (see `requireUser`). */
 export const createClerkAuth =
-  (clerk: Pick<ClerkClient, "authenticateRequest"> = client, authorizedParties = [env.FRONTEND_ORIGIN]): RequestHandler =>
+  (clerk: Pick<ClerkClient, "authenticateRequest"> = client, authorizedParties = [env.FRONTEND_ORIGIN], timeoutMs = VERIFY_TIMEOUT_MS): RequestHandler =>
   async (req, _res, next) => {
     signedIn.set(req, null);
     const token = BEARER.exec(req.get("authorization") ?? "")?.[1];
     if (token) {
       let state;
+      let timer: NodeJS.Timeout | undefined;
       try {
-        state = await clerk.authenticateRequest(new Request(VERIFY_URL, { headers: { authorization: `Bearer ${token}` } }), {
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`session token verification took longer than ${timeoutMs} ms`)), timeoutMs);
+        });
+        const verify = clerk.authenticateRequest(new Request(VERIFY_URL, { headers: { authorization: `Bearer ${token}` } }), {
           authorizedParties, // a token minted for some other site must not work here
           acceptsToken: "session_token",
         });
+        state = await Promise.race([verify, timeout]);
       } catch (err) {
         logger.error({ err }, "session token verification failed unexpectedly");
         throw unavailable();
+      } finally {
+        clearTimeout(timer);
       }
       if (state.status === "signed-in") {
         signedIn.set(req, state.toAuth().userId || null); // an empty subject is never a user

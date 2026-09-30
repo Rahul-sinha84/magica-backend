@@ -180,6 +180,26 @@ describe("when Clerk cannot verify tokens (our problem, not the user's)", () => 
     expect(JSON.stringify(res.body)).not.toContain("socket hang up");
   });
 
+  it("gives up on a verification that never answers, with 503", async () => {
+    const hung = express();
+    hung.use(createClerkAuth({ authenticateRequest: vi.fn(() => new Promise<never>(() => {})) }, [ORIGIN], 50));
+    hung.get("/who", (req, res) => void res.json({ userId: clerkUserId(req) }));
+    hung.use(errorHandler);
+    const started = Date.now();
+    const res = await api(hung).get("/who").set("Authorization", `Bearer ${token()}`);
+    expect(res.status).toBe(503);
+    expect(ErrorResponseSchema.parse(res.body).code).toBe("SERVICE_UNAVAILABLE");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not time out a verification that answers in time", async () => {
+    const slow = express();
+    slow.use(createClerkAuth(trusting, [ORIGIN], 5_000));
+    slow.get("/who", (req, res) => void res.json({ userId: clerkUserId(req) }));
+    const res = await api(slow).get("/who").set("Authorization", `Bearer ${token()}`);
+    expect(res.body).toEqual({ userId: "user_abc" });
+  });
+
   it("classifies the reasons: infrastructure problems are outages, a caller's bad token is not", () => {
     for (const outage of ["unexpected-error", Reason.InvalidSecretKey, Reason.RemoteJWKFailedToLoad, Reason.RemoteJWKInvalid, Reason.RemoteJWKMissing, Reason.JWKFailedToResolve, Reason.LocalJWKMissing]) {
       expect(isVerificationOutage(outage)).toBe(true);
