@@ -91,6 +91,34 @@ describe("the system prompt", () => {
     expect(prompt).toMatch(/only write text/);
   });
 
+  it("with tools: lists every tool and skill (names and descriptions only), and how to use them", async () => {
+    const { agentTools } = await import("#src/tools/index.js");
+    const { loadSkillRegistry } = await import("#src/skills/registry.js");
+    const { SKILL_ROOTS } = await import("#src/skills/skills.js");
+    const { pino } = await import("pino");
+    const skills = loadSkillRegistry(SKILL_ROOTS, pino({ level: "silent" }));
+    const tools = agentTools.functions().map((f) => ({ name: f.function.name, description: f.function.description }));
+    const prompt = systemPrompt(new Date(0), { skills: skills.metadata(), tools });
+
+    for (const tool of tools) expect(prompt).toContain(`- ${tool.name}: ${tool.description}`);
+    for (const skill of skills.metadata()) expect(prompt).toContain(`- ${skill.name}: ${skill.description}`);
+    expect(prompt).toMatch(/call load_skill with the skill's name/);
+    expect(prompt).toMatch(/\[Generated image: <url>\]/);
+    expect(prompt).toMatch(/never invent a link/);
+    expect(prompt).not.toMatch(/only write text/);
+    for (const { name } of skills.metadata()) expect(prompt).not.toContain(skills.get(name)?.body.slice(0, 80) ?? "never"); // never a skill body
+  });
+
+  it("with tools but no skills: no skills section", () => {
+    const prompt = systemPrompt(new Date(0), { skills: [], tools: [{ name: "crop_image", description: "Crop." }] });
+    expect(prompt).toContain("## Tools");
+    expect(prompt).not.toContain("## Skills");
+  });
+
+  it("with an empty tool list: falls back to text only", () => {
+    expect(systemPrompt(new Date(0), { skills: [{ name: "x", description: "y" }], tools: [] })).toMatch(/only write text/);
+  });
+
   it("goes first, before the conversation, without changing it", () => {
     const history = [{ role: "user" as const, content: "hi" }];
     const out = withSystemPrompt(history, new Date(0));

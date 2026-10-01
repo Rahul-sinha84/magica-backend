@@ -2,15 +2,112 @@ import OpenAI from "openai";
 import { env } from "#src/env/worker.js";
 import { wellFormed } from "#src/lib/text.js";
 
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+/** A tool call as the model asked for it, in the shape it is sent back to the model with its result. */
+export interface ToolCallMessage {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCallMessage[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+/** A tool offered to the model (OpenAI function format). */
+export interface ModelTool {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
+/** A complete tool call. `malformed` says why its arguments can't be used (the call still goes back to the model). */
+export interface ToolCallEvent {
+  type: "tool-call";
+  /** our id for the call: 9 letters and digits, which every provider accepts when it is sent back */
+  id: string;
+  name: string;
+  /** the arguments as they are sent back to the model: always valid JSON (`{}` when the model's own were unusable) */
+  arguments: string;
+  /** the parsed arguments, when they are a JSON object */
+  input?: Record<string, unknown>;
+  malformed?: string;
+  /** for logs only: the start of the model's own arguments when they were unusable */
+  rawArguments?: string;
+}
+
+const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+/** A tool-call id every provider accepts (some require exactly 9 letters or digits). */
+export function newToolCallId(random: () => number = Math.random): string {
+  let id = "";
+  for (let i = 0; i < 9; i++) id += ID_ALPHABET[Math.floor(random() * ID_ALPHABET.length)] ?? "a";
+  return id;
 }
 
 export type ModelEvent =
   | { type: "text"; delta: string }
   | { type: "reasoning"; delta: string }
+  | ToolCallEvent
   | { type: "done"; model: string | null; inputTokens: number; outputTokens: number; finishReason: string | null };
+
+export interface StreamCallOptions {
+  /** Tools the model may call this step. Calls arrive as tool-call events once the stream has finished. */
+  tools?: ModelTool[];
+}
+
+/** Arguments larger than this are not a sensible tool call (and would not fit the context window anyway). */
+export const MAX_TOOL_ARGUMENTS_CHARS = 65_536;
+
+/** Removes NUL characters (Postgres can't store them) and broken surrogates from every string in a parsed value. */
+function cleanStrings(value: unknown): unknown {
+  if (typeof value === "string") return wellFormed(value.replaceAll("\u0000", ""));
+  if (Array.isArray(value)) return value.map(cleanStrings);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [cleanStrings(key) as string, cleanStrings(item)]));
+  return value;
+}
+
+interface PartialToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+/**
+ * Turns the tool-call pieces streamed by index into complete calls, in index order, and parses their arguments once.
+ *
+ * The free router may send the next step to a different provider, and the calls are sent back to it with their
+ * results, so each call gets our own id (some providers reject other ids), and an unusable call goes back with `{}`
+ * as its arguments (some providers reject a conversation that contains arguments that aren't JSON).
+ */
+export function assembleToolCalls(parts: Map<number, PartialToolCall>, makeId: () => string = newToolCallId): ToolCallEvent[] {
+  const used = new Set<string>();
+  const uniqueId = () => {
+    let id = makeId();
+    while (used.has(id)) id = makeId();
+    used.add(id);
+    return id;
+  };
+  return [...parts.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, part]) => {
+      const name = part.name.trim();
+      const raw = part.arguments;
+      const event: ToolCallEvent = { type: "tool-call", id: uniqueId(), name, arguments: raw };
+      const unusable = (malformed: string): ToolCallEvent => ({ ...event, arguments: "{}", malformed, rawArguments: raw.slice(0, 200) });
+      if (!name) return unusable("the tool call has no tool name");
+      if (raw.length > MAX_TOOL_ARGUMENTS_CHARS) return unusable(`the arguments are too large (over ${MAX_TOOL_ARGUMENTS_CHARS} characters)`);
+      let parsed: unknown;
+      try {
+        parsed = raw.trim() ? JSON.parse(raw) : {}; // some models send nothing for a call without arguments
+      } catch {
+        return unusable("the arguments are not valid JSON");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return unusable("the arguments must be a JSON object");
+      const input = cleanStrings(parsed) as Record<string, unknown>;
+      // what goes back is what will run: the cleaned arguments, re-serialised
+      return { ...event, arguments: raw.trim() ? JSON.stringify(input) : "{}", input };
+    });
+}
 
 /** Why the model could not answer, in terms of what the user can do about it. */
 export type ModelFailure = "RATE_LIMITED" | "UNAVAILABLE" | "EMPTY" | "INTERRUPTED" | "REJECTED" | "CONFIG";
@@ -100,7 +197,15 @@ class TextCleaner {
 interface ChunkExtras {
   model?: string;
   error?: { code?: number | string; message?: string };
-  choices?: { delta?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null }; finish_reason?: string | null }[];
+  choices?: {
+    delta?: {
+      content?: string | null;
+      reasoning?: string | null;
+      reasoning_content?: string | null;
+      tool_calls?: { index?: number; id?: string | null; function?: { name?: string | null; arguments?: string | null } }[];
+    };
+    finish_reason?: string | null;
+  }[];
 }
 
 function fromStatus(status: number, retryAfterMs: number | undefined, detail: string): ModelError {
@@ -134,7 +239,7 @@ function fromStreamError(error: NonNullable<ChunkExtras["error"]>): ModelError {
   return Number.isFinite(status) ? fromStatus(status, undefined, `${status}: ${error.message ?? "stream error"}`) : new ModelError("UNAVAILABLE", error.message ?? "stream error", true);
 }
 
-export type ModelStream = (messages: ChatMessage[], signal?: AbortSignal) => AsyncGenerator<ModelEvent>;
+export type ModelStream = (messages: ChatMessage[], signal?: AbortSignal, options?: StreamCallOptions) => AsyncGenerator<ModelEvent>;
 
 export function createStreamer(options: StreamerOptions = {}): ModelStream {
   const { maxTokens, attempts, baseDelayMs, maxDelayMs, stallMs } = { ...DEFAULTS, ...options };
@@ -144,7 +249,7 @@ export function createStreamer(options: StreamerOptions = {}): ModelStream {
   const client = new OpenAI({ baseURL: options.baseURL ?? env.OPENROUTER_BASE_URL, apiKey: options.apiKey ?? env.OPENROUTER_API_KEY, maxRetries: 0 });
   const model = options.model ?? env.OPENROUTER_MODEL;
 
-  async function* attempt(messages: ChatMessage[], outer?: AbortSignal): AsyncGenerator<ModelEvent> {
+  async function* attempt(messages: ChatMessage[], outer: AbortSignal | undefined, tools: ModelTool[] | undefined): AsyncGenerator<ModelEvent> {
     const local = new AbortController();
     const forward = () => local.abort(outer?.reason);
     if (outer?.aborted) forward();
@@ -163,11 +268,20 @@ export function createStreamer(options: StreamerOptions = {}): ModelStream {
     const text = new TextCleaner();
     const reasoning = new TextCleaner();
     let seen = false;
+    const toolParts = new Map<number, PartialToolCall>();
     let usage = { model: null as string | null, input: 0, output: 0, finish: null as string | null };
     try {
       watch();
       const stream = await client.chat.completions.create(
-        { model, messages, stream: true, stream_options: { include_usage: true }, max_tokens: maxTokens, temperature: 0.7 },
+        {
+          model,
+          messages,
+          stream: true,
+          stream_options: { include_usage: true },
+          max_tokens: maxTokens,
+          temperature: 0.7,
+          ...(tools?.length && { tools, tool_choice: "auto" as const }),
+        },
         { signal: local.signal },
       );
       for await (const chunk of stream) {
@@ -188,6 +302,24 @@ export function createStreamer(options: StreamerOptions = {}): ModelStream {
           seen = true;
           yield { type: "text", delta: answer };
         }
+        // tool calls arrive in pieces by index; they are only handed on once the stream has finished, so a stream that
+        // breaks off half-way through a call has sent nothing and can still be retried safely
+        for (const piece of choice?.delta?.tool_calls ?? []) {
+          // Providers differ: most number each call (`index`), some leave it out and only give each call an `id`.
+          let index = piece.index;
+          if (index === undefined) {
+            const byId = piece.id ? [...toolParts.entries()].find(([, p]) => p.id === piece.id)?.[0] : undefined;
+            index = byId ?? (piece.id && toolParts.size > 0 ? Math.max(...toolParts.keys()) + 1 : Math.max(0, ...toolParts.keys()));
+          }
+          const part = toolParts.get(index) ?? { id: "", name: "", arguments: "" };
+          if (piece.id) part.id = piece.id;
+          // Some providers send the name in pieces, others repeat the whole name in every piece.
+          const name = piece.function?.name ?? "";
+          if (name && name !== part.name) part.name = name.startsWith(part.name) ? name : part.name + name;
+          part.arguments += piece.function?.arguments ?? "";
+          if (part.arguments.length > MAX_TOOL_ARGUMENTS_CHARS * 2) part.arguments = part.arguments.slice(0, MAX_TOOL_ARGUMENTS_CHARS + 1); // bounded memory
+          toolParts.set(index, part);
+        }
       }
       // The SDK ends the iteration quietly (no error) when the request is aborted, so a stop or a stall must be checked for
       // here; otherwise a cut-off answer would look like a finished one.
@@ -199,7 +331,9 @@ export function createStreamer(options: StreamerOptions = {}): ModelStream {
         seen = true;
         yield { type: "text", delta: tail };
       }
-      if (!seen) throw new ModelError("EMPTY", "the stream ended without any content", true);
+      const calls = assembleToolCalls(toolParts);
+      if (!seen && calls.length === 0) throw new ModelError("EMPTY", "the stream ended without any content", true);
+      for (const call of calls) yield call;
       yield { type: "done", model: usage.model, inputTokens: usage.input, outputTokens: usage.output, finishReason: usage.finish };
     } catch (error) {
       if (stalled) throw new ModelError("UNAVAILABLE", `no data for ${stallMs} ms`, true);
@@ -211,11 +345,11 @@ export function createStreamer(options: StreamerOptions = {}): ModelStream {
     }
   }
 
-  return async function* stream(messages, signal) {
+  return async function* stream(messages, signal, callOptions) {
     for (let tryNumber = 1; ; tryNumber++) {
       let sentToUser = false;
       try {
-        for await (const event of attempt(messages, signal)) {
+        for await (const event of attempt(messages, signal, callOptions?.tools)) {
           sentToUser = true;
           yield event;
         }

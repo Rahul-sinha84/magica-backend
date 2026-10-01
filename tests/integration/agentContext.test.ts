@@ -5,7 +5,7 @@ import { fixtures, resetDb } from "../helpers/db.js";
 
 beforeEach(resetDb);
 
-type Row = { role: "USER" | "ASSISTANT"; content: string | null; status?: "COMPLETED" | "FAILED" | "CANCELLED" | "STREAMING"; at: number; id?: string };
+type Row = { role: "USER" | "ASSISTANT"; content: string | null; status?: "COMPLETED" | "FAILED" | "CANCELLED" | "STREAMING"; at: number; id?: string; blocks?: unknown[] };
 const T0 = Date.UTC(2026, 0, 1);
 
 async function setup(rows: Row[]) {
@@ -14,7 +14,7 @@ async function setup(rows: Row[]) {
   const ids: string[] = [];
   for (const row of rows) {
     const made = await prisma.message.create({
-      data: { ...(row.id && { id: row.id }), chatId: chat.id, userId: user.id, role: row.role, content: row.content, status: row.status ?? "COMPLETED", createdAt: new Date(T0 + row.at * 1000) },
+      data: { ...(row.id && { id: row.id }), chatId: chat.id, userId: user.id, role: row.role, content: row.content, status: row.status ?? "COMPLETED", createdAt: new Date(T0 + row.at * 1000), ...(row.blocks && { contentBlocks: row.blocks as never }) },
     });
     ids.push(made.id);
   }
@@ -140,3 +140,110 @@ describe("loadConversation", () => {
 function CONTEXT_BUDGET_PART(): number {
   return Math.floor(CONTEXT_CHAR_BUDGET * 0.45);
 }
+
+describe("earlier media and tool results in the history", () => {
+  const IMG = "https://g.tlcdn.com/gen/fox.png";
+  const image = { type: "image", url: IMG, model: "GPT Image 2" };
+
+  it("tells the model about an image an earlier reply created, so a follow-up can refer to it", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "Draw a fox", at: 1 },
+      { role: "ASSISTANT", content: "Here is your fox.", at: 2, blocks: [{ type: "text", content: "Here is your fox." }, image] },
+      { role: "USER", content: "Crop it to the top half", at: 3 },
+    ]);
+    expect(await loadConversation(chat.id, ids[2]!)).toEqual([
+      { role: "user", content: "Draw a fox" },
+      { role: "assistant", content: `Here is your fox.\n[Generated image: ${IMG}]` },
+      { role: "user", content: "Crop it to the top half" },
+    ]);
+  });
+
+  it("keeps a reply that is only an image (no text at all)", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "Draw a fox", at: 1 },
+      { role: "ASSISTANT", content: "", at: 2, blocks: [image] },
+      { role: "USER", content: "Now crop it", at: 3 },
+    ]);
+    expect((await loadConversation(chat.id, ids[2]!))[1]).toEqual({ role: "assistant", content: `[Generated image: ${IMG}]` });
+  });
+
+  it("keeps the media of a failed or stopped reply, but never its partial text", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "Draw then merge", at: 1 },
+      { role: "ASSISTANT", content: "Half an ans", status: "FAILED", at: 2, blocks: [{ type: "text", content: "Half an ans" }, image] },
+      { role: "USER", content: "Use that image", at: 3 },
+      { role: "ASSISTANT", content: "Stopped mid", status: "CANCELLED", at: 4, blocks: [{ type: "text", content: "Stopped mid" }, { type: "video", url: "https://a.test/v.mp4" }] },
+      { role: "USER", content: "And the video", at: 5 },
+    ]);
+    const history = await loadConversation(chat.id, ids[4]!);
+    expect(history.map((m) => m.content).join("\n")).not.toMatch(/Half an ans|Stopped mid/);
+    expect(history).toEqual([
+      { role: "user", content: "Draw then merge" },
+      { role: "assistant", content: `[Generated image: ${IMG}]` },
+      { role: "user", content: "Use that image" },
+      { role: "assistant", content: "[Generated video: https://a.test/v.mp4]" },
+      { role: "user", content: "And the video" },
+    ]);
+  });
+
+  it("notes which tool calls failed and why, but not successful tool details or thinking", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "Crop it", at: 1 },
+      {
+        role: "ASSISTANT",
+        content: "The crop failed.",
+        at: 2,
+        blocks: [
+          { type: "thinking", content: "secret reasoning" },
+          { type: "tool_call", toolCallId: "c1", toolName: "load_skill", toolInput: { name: "image-editing" }, status: "completed" },
+          { type: "tool_result", toolCallId: "c1", toolName: "load_skill", result: { instructions: "LONG SKILL TEXT" }, isError: false },
+          { type: "tool_call", toolCallId: "c2", toolName: "crop_image", toolInput: {}, status: "failed" },
+          { type: "tool_result", toolCallId: "c2", toolName: "crop_image", isError: true, errorMessage: "Cropping timed out." },
+          { type: "text", content: "The crop failed." },
+          { type: "usage", inputTokens: 1, outputTokens: 1, model: "m" },
+        ],
+      },
+      { role: "USER", content: "Try again", at: 3 },
+    ]);
+    const reply = (await loadConversation(chat.id, ids[2]!))[1]?.content ?? "";
+    expect(reply).toBe("The crop failed.\n[crop_image failed: Cropping timed out.]");
+    expect(reply).not.toMatch(/secret reasoning|LONG SKILL TEXT/);
+  });
+
+  it("names audio and video media correctly, in the order they were made", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "Make media", at: 1 },
+      { role: "ASSISTANT", content: "Done.", at: 2, blocks: [{ type: "text", content: "Done." }, { type: "video", url: "https://a.test/1.mp4" }, { type: "audio", url: "https://a.test/2.mp3" }, image] },
+      { role: "USER", content: "Next", at: 3 },
+    ]);
+    expect((await loadConversation(chat.id, ids[2]!))[1]?.content).toBe(`Done.\n[Generated video: https://a.test/1.mp4]\n[Generated audio: https://a.test/2.mp3]\n[Generated image: ${IMG}]`);
+  });
+
+  it("counts the media lines against the character budget", async () => {
+    const long = "x".repeat(CONTEXT_CHAR_BUDGET - 30);
+    const { chat, ids } = await setup([
+      { role: "USER", content: "First", at: 1 },
+      { role: "ASSISTANT", content: "", at: 2, blocks: [image] },
+      { role: "USER", content: long, at: 3 },
+    ]);
+    expect((await loadConversation(chat.id, ids[2]!)).map((m) => m.role)).toEqual(["user"]); // the image line didn't fit
+  });
+
+  it("still leaves out a failed reply that produced nothing usable", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "q1", at: 1 },
+      { role: "ASSISTANT", content: "partial", status: "FAILED", at: 2, blocks: [{ type: "text", content: "partial" }] },
+      { role: "USER", content: "q2", at: 3 },
+    ]);
+    expect(await loadConversation(chat.id, ids[2]!)).toEqual([{ role: "user", content: "q1\n\nq2" }]);
+  });
+
+  it("uses an old reply's plain text when it has no blocks", async () => {
+    const { chat, ids } = await setup([
+      { role: "USER", content: "q1", at: 1 },
+      { role: "ASSISTANT", content: "plain answer", at: 2 },
+      { role: "USER", content: "q2", at: 3 },
+    ]);
+    expect((await loadConversation(chat.id, ids[2]!))[1]).toEqual({ role: "assistant", content: "plain answer" });
+  });
+});

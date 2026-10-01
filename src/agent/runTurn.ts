@@ -127,6 +127,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
         usage = { model: event.model, inputTokens: event.inputTokens, outputTokens: event.outputTokens };
         continue;
       }
+      if (event.type === "tool-call") continue; // no tools are offered to the model yet (the tool loop comes next)
       if (event.type === "reasoning") {
         thinkingStart ??= now();
       } else {
