@@ -47,8 +47,18 @@ export const WorkerEnvSchema = BaseEnvSchema.extend({
   AGENT_CONCURRENCY_LIMIT: z.coerce.number().int().min(1).max(1000).default(20),
   // Magica's model API (Crop Image, GPT Image 2, Merge Videos). Only the worker calls it, so only the worker has the
   // key. The base URL is configuration with no default, so no environment's host is ever baked into the code.
-  MAGICA_API_KEY: key,
-  MAGICA_BASE_URL: z.url({ protocol: /^https?$/ }).transform((u) => u.replace(/\/+$/, "")),
+  // a pasted key with a space or line break inside would only fail later, as a confusing 401
+  MAGICA_API_KEY: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }),
+  // paths are appended to it, and it may be logged: a query, fragment or credentials in it would break or leak
+  MAGICA_BASE_URL: z
+    .url({ protocol: /^https?$/ })
+    .refine((u) => !/[?#]/.test(u), { error: "must not contain a query string or fragment" })
+    .refine((u) => {
+      if (!URL.canParse(u)) return true; // already reported as not a URL
+      const { username, password } = new URL(u);
+      return !username && !password;
+    }, { error: "must not contain a username or password" })
+    .transform((u) => u.replace(/\/+$/, "")),
 });
 
 // Values are trimmed; blank ones (e.g. `KEY=` copied from .env.example) count as missing, not as empty strings.

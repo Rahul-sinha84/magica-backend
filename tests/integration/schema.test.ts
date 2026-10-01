@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Prisma, prisma } from "#src/db/client.js";
 import { fixtures, resetDb } from "../helpers/db.js";
@@ -283,5 +284,79 @@ describe("database connection limits", () => {
   it("applies a statement timeout and a bounded wait for a connection, so nothing can hang forever", async () => {
     const [row] = await prisma.$queryRaw<{ timeout: string }[]>`SELECT current_setting('statement_timeout') AS timeout`;
     expect(row?.timeout).toBe("15s");
+  });
+});
+
+describe("run skills (RunSkill)", () => {
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  async function aRun() {
+    const user = await fixtures.user();
+    const chat = await fixtures.chat(user.id);
+    return fixtures.run(chat.id, user.id);
+  }
+  const skill = (agentRunId: string, skillName = "image-generation", content = "# Guide\nUse the tool.") =>
+    prisma.runSkill.create({ data: { agentRunId, skillName, content, contentHash: sha(content) } });
+
+  it("stores the loaded text, its hash and when it was loaded", async () => {
+    const run = await aRun();
+    const row = await skill(run.id);
+    expect(row).toMatchObject({ agentRunId: run.id, skillName: "image-generation", content: "# Guide\nUse the tool.", contentHash: sha("# Guide\nUse the tool.") });
+    expect(row.loadedAt).toBeInstanceOf(Date);
+  });
+
+  it("rejects the same skill twice in one run", async () => {
+    const run = await aRun();
+    await skill(run.id);
+    expect(await failure(skill(run.id))).toBe("P2002");
+  });
+
+  it("allows the same skill in different runs, and different skills in one run", async () => {
+    const [a, b] = [await aRun(), await aRun()];
+    await skill(a.id);
+    await expect(skill(b.id)).resolves.toBeDefined();
+    await expect(skill(a.id, "video-merging")).resolves.toBeDefined();
+    expect(await prisma.runSkill.count()).toBe(3);
+  });
+
+  it("is deleted with its run, and with the run's chat", async () => {
+    const run = await aRun();
+    await skill(run.id);
+    await prisma.agentRun.delete({ where: { id: run.id } });
+    expect(await prisma.runSkill.count()).toBe(0);
+
+    const other = await aRun();
+    await skill(other.id);
+    await prisma.chat.delete({ where: { id: other.chatId } });
+    expect(await prisma.runSkill.count()).toBe(0);
+  });
+
+  it("needs an existing run", async () => {
+    expect(await failure(skill("no-such-run"))).toBe("P2003");
+  });
+
+  it.each([
+    ["uppercase hex", "A".repeat(64)],
+    ["too short", "a".repeat(63)],
+    ["too long", "a".repeat(65)],
+    ["not hex", "g".repeat(64)],
+    ["empty", ""],
+  ])("rejects a hash that is not sha256 in lowercase hex (%s)", async (_label, contentHash) => {
+    const run = await aRun();
+    expect(await rejection(prisma.runSkill.create({ data: { agentRunId: run.id, skillName: "x", content: "x", contentHash } }))).toContain("RunSkill_contentHash_sha256");
+  });
+
+  it("keeps a body of exactly 32 KB and rejects one byte more", async () => {
+    const run = await aRun();
+    const max = "a".repeat(32_768);
+    await expect(skill(run.id, "at-limit", max)).resolves.toBeDefined();
+    expect(await rejection(skill(run.id, "over-limit", max + "a"))).toContain("RunSkill_content_size");
+  });
+
+  it("measures the limit in bytes, so multi-byte text counts at its real size", async () => {
+    const run = await aRun();
+    const emoji = "🦊".repeat(8_192); // 4 bytes each: exactly 32 KB
+    const row = await skill(run.id, "unicode", emoji);
+    expect(row.content).toBe(emoji); // stored and read back unchanged
+    expect(await rejection(skill(run.id, "unicode-over", emoji + "é"))).toContain("RunSkill_content_size");
   });
 });

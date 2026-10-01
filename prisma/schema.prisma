@@ -1,4 +1,4 @@
-// Day 1 core tables. Attachment / RunSkill / Waitpoint arrive on Day 2 as an additive migration.
+// Core tables. Attachment and Waitpoint arrive later as additive migrations.
 //
 // Constraints Prisma cannot express live as raw SQL at the end of the init migration:
 //   - AgentRun_one_active_per_chat: partial unique index (one PENDING/RUNNING run per chat)
@@ -94,12 +94,28 @@ model AgentRun {
   assistantMessage Message          @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
   retryOf          AgentRun?        @relation("Retries", fields: [retryOfRunId], references: [id], onDelete: SetNull)
   retriedBy        AgentRun?        @relation("Retries")
+  loadedSkills     RunSkill[]
   toolInvocations  ToolInvocation[]
   creditLedger     CreditLedger[]
 
   @@index([chatId, createdAt(sort: Desc)])
   @@index([triggerMessageId])
   @@index([completedAt(sort: Desc)]) // the model status reads the most recently ended runs
+}
+
+// A skill the agent loaded during a run: the exact text it was given and its sha256, so a repeat load in the same run,
+// or a retry of the run, gets the same guidance even if the skill file has changed since.
+model RunSkill {
+  id          String   @id @default(cuid())
+  agentRunId  String
+  skillName   String
+  contentHash String // sha256 of `content`, lowercase hex
+  content     String // the skill body as loaded
+  loadedAt    DateTime @default(now())
+
+  agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+
+  @@unique([agentRunId, skillName])
 }
 
 model ToolInvocation {

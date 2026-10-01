@@ -149,6 +149,29 @@ describe("worker env", () => {
     expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: url })).toThrow(/MAGICA_BASE_URL/);
   });
 
+  it.each([
+    ["a query string", "https://inference.magica.example/?region=eu"],
+    ["a fragment", "https://inference.magica.example/#v1"],
+    ["a username and password", "https://user:secret@inference.magica.example"],
+    ["a username only", "https://user@inference.magica.example"],
+  ])("rejects a base URL with %s", (_label, url) => {
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: url })).toThrow(/MAGICA_BASE_URL/);
+  });
+
+  it("never echoes credentials from a base URL into the error", () => {
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: "https://user:topsecret@inference.magica.example" })).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining("topsecret") as unknown }) as Error,
+    );
+  });
+
+  it.each([
+    ["a space", "mg-secret abc123"],
+    ["a line break", "mg-secret\nabc123"],
+    ["a tab", "mg-secret\tabc123"],
+  ])("rejects a key with %s inside it", (_label, key) => {
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_API_KEY: key })).toThrow(/MAGICA_API_KEY/);
+  });
+
   it("trims the key and drops trailing slashes from the base URL, keeping any path", () => {
     expect(parseEnv(WorkerEnvSchema, { ...worker, MAGICA_API_KEY: "  mg-secret-abc123  ", MAGICA_BASE_URL: "https://inference.magica.example/" })).toMatchObject({
       MAGICA_API_KEY: "mg-secret-abc123",
