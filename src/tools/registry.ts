@@ -31,11 +31,27 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   kind: "inline" | "magica";
   /** Credits one successful call costs. */
   creditCost: number;
-  /** The media a result produced, in order. */
-  assets?: (output: TOutput) => AssetBlock[];
+  /** The media a result produced, in order (the input supplies details such as the prompt, for the artifact panel). */
+  assets?: (output: TOutput, input?: TInput) => AssetBlock[];
   /** What is stored and shown of the input. Defaults to a generic clean-up (see sanitizeInput). */
   sanitize?: (input: TInput) => Record<string, unknown>;
-  execute: (input: TInput, context: ToolContext) => Promise<TOutput>;
+  /** inline tools: runs the tool inside the turn */
+  execute?: (input: TInput, context: ToolContext) => Promise<TOutput>;
+  /** magica tools: how the call maps onto a Magica model (it runs as a durable child task, see src/tools/magicaTools.ts) */
+  magica?: MagicaSpec<TInput, TOutput>;
+}
+
+/** How a tool's input becomes a Magica run, and the run's output becomes the tool's output. */
+export interface MagicaSpec<TInput, TOutput> {
+  nodeType: string;
+  /** the sub-model (mode) to run, when the model has several */
+  subModelId?: (input: TInput) => string | undefined;
+  /** names the work in messages: "Image generation", "Cropping", "Video merging" */
+  label: string;
+  /** the Magica input, before it is checked against the model's live schema */
+  toInput: (input: TInput) => Record<string, unknown>;
+  /** reads the run's output; throws a ToolError when it has no usable result */
+  fromOutput: (output: unknown) => TOutput;
 }
 
 /**
@@ -94,6 +110,7 @@ export function createToolRegistry(definitions: ToolDefinition[]): ToolRegistry 
   const tools = new Map<string, ToolDefinition>();
   for (const tool of definitions) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(tool.name)) throw new Error(`Invalid tool name: ${tool.name}`);
+    if (tool.kind === "inline" ? !tool.execute : !tool.magica) throw new Error(`Tool ${tool.name} has no way to run for its kind (${tool.kind})`);
     if (tools.has(tool.name)) throw new Error(`Duplicate tool: ${tool.name}`);
     tools.set(tool.name, tool);
   }
@@ -120,6 +137,8 @@ export function createToolRegistry(definitions: ToolDefinition[]): ToolRegistry 
       const parsed = parseInput(name, raw);
       if (!parsed.ok) return parsed;
       const { tool, input } = parsed;
+      // a media tool runs as a durable task with its own lifecycle and credits, never inline
+      if (!tool.execute) return { ok: false, code: "TOOL_FAILED", message: `${name} runs as a background task and can't be run inline.` };
       let output: unknown;
       try {
         output = await tool.execute(input, context);
@@ -134,7 +153,7 @@ export function createToolRegistry(definitions: ToolDefinition[]): ToolRegistry 
         context.log.error({ tool: name, issues: checked.error.issues.slice(0, 5) }, "tool returned an unexpected result");
         return { ok: false, code: "BAD_OUTPUT", message: `${name} returned an unexpected result.` };
       }
-      return { ok: true, output: checked.data, assets: tool.assets?.(checked.data) ?? [] };
+      return { ok: true, output: checked.data, assets: tool.assets?.(checked.data, input) ?? [] };
     },
   };
 }

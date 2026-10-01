@@ -127,8 +127,9 @@ model ToolInvocation {
   input        Json
   output       Json?
   errorMessage String?
-  magicaRunId  String? // external run id (Day 2)
-  creditCost   Int?
+  magicaRunId  String? // Magica's run id, saved as soon as the run is started
+  creditCost   Int? // app credits charged for this call (set when it is settled)
+  providerCost Int? // what Magica reported the run used, in its microcredits (for reference and reconciliation)
   durationMs   Int?
   dispatchedAt DateTime? // set BEFORE the external call: tells "never sent" from "sent, outcome unknown"
   completedAt  DateTime?

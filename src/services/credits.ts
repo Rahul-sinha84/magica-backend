@@ -54,5 +54,18 @@ export async function release(tx: Tx, e: LedgerEntry): Promise<boolean> {
   return true;
 }
 
+/**
+ * Spends credits for good. Used to settle a hold: release it first (held goes down), then charge (balance goes down),
+ * so `held <= balance` holds at every step. One conditional UPDATE, so a balance can never go below what is still held.
+ */
+export async function charge(tx: Tx, e: LedgerEntry): Promise<boolean> {
+  if (!(await record(tx, "CHARGE", -e.amount, e))) return false;
+  const updated = await tx.$executeRaw`
+    UPDATE "User" SET "balance" = "balance" - ${e.amount}, "updatedAt" = now()
+    WHERE "id" = ${e.userId} AND "balance" - "held" >= ${e.amount}`;
+  if (updated === 0) throw new Error(`Charging ${e.amount} credits for ${e.userId} but fewer are available`); // a bug: it was held first
+  return true;
+}
+
 export const getCredits = (userId: string) =>
   prisma.user.findUnique({ where: { id: userId }, select: { balance: true, held: true } });

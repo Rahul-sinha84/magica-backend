@@ -8,6 +8,18 @@ export const AGENT_TASK_ID = "agent-turn";
  */
 export const AGENT_QUEUE_TTL_SECONDS = 600;
 
+/** The child task that runs one Magica tool call durably. */
+export const MAGICA_TOOL_TASK_ID = "magica-tool";
+
+/** What the Magica tool task receives: the recorded tool call (its input and credits are already in the database). */
+export interface MagicaToolPayload {
+  invocationId: string;
+  agentRunId: string;
+  chatId: string;
+  userId: string;
+  traceId: string;
+}
+
 /** What the agent task receives. It loads everything else (messages, history) from the database by these ids. */
 export interface AgentTurnPayload {
   agentRunId: string;

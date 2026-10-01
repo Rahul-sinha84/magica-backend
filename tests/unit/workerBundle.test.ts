@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 // The agent task runs on Trigger.dev's workers, bundled on its own. It must never pull in the API's server-only code
 // (Clerk keys, the Trigger client used to start runs, routes, Express), which the worker neither has nor needs.
 describe("the agent task's bundle", () => {
-  it("contains the agent and nothing that belongs to the API", async () => {
+  it.each(["src/trigger/agentTurn.ts", "src/trigger/magicaToolTask.ts"])("%s contains worker code and nothing that belongs to the API", async (entry) => {
     const result = await build({
-      entryPoints: ["src/trigger/agentTurn.ts"],
+      entryPoints: [entry],
       bundle: true,
       write: false,
       metafile: true,
@@ -17,7 +17,7 @@ describe("the agent task's bundle", () => {
       external: ["@prisma/client", "@prisma/adapter-pg", "pg", "pino", "pino-pretty", "@trigger.dev/sdk", "@trigger.dev/sdk/*", "openai", "zod"],
     });
     const inputs = Object.keys(result.metafile.inputs);
-    expect(inputs.some((file) => file.endsWith("src/agent/runTurn.ts"))).toBe(true);
+    expect(inputs.some((file) => file.endsWith(entry.includes("magica") ? "src/tools/magicaInvocation.ts" : "src/agent/runTurn.ts"))).toBe(true);
     expect(inputs.some((file) => file.endsWith("src/env/worker.ts"))).toBe(true);
 
     const forbidden = ["src/env/server.ts", "src/lib/trigger.ts", "src/auth/", "src/routes/", "src/app.ts", "src/server.ts", "src/middleware/"];

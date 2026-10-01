@@ -132,9 +132,12 @@ describe("the tools offered to the model", () => {
 });
 
 describe("the agent's tools today", () => {
-  it("are the skill tools, inline and free; the media tools arrive only once they are real", () => {
-    expect(agentTools.names()).toEqual(["load_skill", "read_skill_asset"]);
-    for (const name of agentTools.names()) expect(agentTools.get(name)).toMatchObject({ kind: "inline", creditCost: 0 });
+  it("are the two skill tools (inline, free) and the three Magica tools (durable, priced)", () => {
+    expect(agentTools.names()).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"]);
+    for (const name of ["load_skill", "read_skill_asset"]) expect(agentTools.get(name)).toMatchObject({ kind: "inline", creditCost: 0 });
+    expect(agentTools.get("gpt_image_2")).toMatchObject({ kind: "magica", creditCost: 1_000_000 });
+    expect(agentTools.get("crop_image")).toMatchObject({ kind: "magica", creditCost: 200_000 });
+    expect(agentTools.get("merge_videos")).toMatchObject({ kind: "magica", creditCost: 500_000 });
     expect(TOOL_CREDIT_COSTS).toEqual({ load_skill: 0, read_skill_asset: 0, gpt_image_2: 1_000_000, crop_image: 200_000, merge_videos: 500_000 });
   });
 

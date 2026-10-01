@@ -4,6 +4,7 @@ import { prisma, type Prisma } from "#src/db/client.js";
 import { holdKey, releaseKey } from "#src/lib/idempotency.js";
 import { logger } from "#src/lib/logger.js";
 import { release } from "#src/services/credits.js";
+import { endActiveInvocations } from "#src/services/toolInvocations.js";
 
 // Shared by the API and the Trigger.dev worker, so it must not import anything that only the server configures.
 
@@ -43,6 +44,9 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
     },
   });
   if (count === 0) return false;
+
+  // a run never ends with credits still reserved for its tools: any tool call still in progress is ended here, together
+  await endActiveInvocations(tx, runId, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended.");
 
   const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { assistantMessageId: true, userId: true, chatId: true } });
 
