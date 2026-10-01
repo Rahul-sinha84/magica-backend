@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { IsoDateTimeSchema } from "./common.js";
-import { ContentBlocksSchema, ImageBlockSchema, VideoBlockSchema } from "./messages.js";
+import { AudioBlockSchema, ContentBlocksSchema, ImageBlockSchema, VideoBlockSchema } from "./messages.js";
 
 // Name of the Trigger.dev realtime stream that carries AgentStreamChunk items.
 export const AGENT_STREAM_ID = "chunks";
@@ -30,8 +30,12 @@ export const ActiveRunResponseSchema = z.object({
 });
 
 // Run metadata: coarse progress only. The content itself arrives as stream chunks.
+// thinking (the model is reasoning, nothing written yet) -> working (writing, or using a tool: see currentTool)
+// -> complete | failed | cancelled; stopping while a cancel is being carried out.
+export const AgentStreamStatusSchema = z.enum(["thinking", "working", "complete", "failed", "cancelled", "stopping"]);
+
 export const AgentStreamMetadataSchema = z.object({
-  status: z.enum(["thinking", "streaming", "calling-tool", "complete", "failed", "cancelled", "stopping"]),
+  status: AgentStreamStatusSchema,
   step: z.string().optional(),
   thinkingDurationMs: z.number().optional(),
   currentTool: z
@@ -64,11 +68,12 @@ export const AgentStreamChunkSchema = z.discriminatedUnion("type", [
     result: z.unknown().optional(),
     errorMessage: z.string().optional(),
   }),
-  z.object({ type: z.literal("asset"), asset: z.discriminatedUnion("type", [ImageBlockSchema, VideoBlockSchema]) }),
+  z.object({ type: z.literal("asset"), asset: z.discriminatedUnion("type", [ImageBlockSchema, VideoBlockSchema, AudioBlockSchema]) }),
 ]);
 
 export type AgentRun = z.infer<typeof AgentRunSchema>;
 export type ActiveRunResponse = z.infer<typeof ActiveRunResponseSchema>;
 export type AgentStreamMetadata = z.infer<typeof AgentStreamMetadataSchema>;
+export type AgentStreamStatus = z.infer<typeof AgentStreamStatusSchema>;
 export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
 export type RunStatus = z.infer<typeof RunStatusSchema>;

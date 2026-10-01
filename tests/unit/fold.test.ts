@@ -103,6 +103,12 @@ describe("foldChunks", () => {
     });
   });
 
+  it("appends a generated audio clip like any other asset", () => {
+    const audio = { type: "audio" as const, url: "https://x.test/a.mp3", durationMs: 3_000 };
+    expect(foldChunks([text("Listen:"), { type: "asset", asset: audio }])).toEqual([{ type: "text", content: "Listen:" }, audio]);
+    expect(blocksToText(foldChunks([text("Listen:"), { type: "asset", asset: audio }]))).toBe("Listen:");
+  });
+
   it("appends generated assets in order", () => {
     const image = { type: "image" as const, url: "https://x.test/a.png", prompt: "sunset" };
     const video = { type: "video" as const, url: "https://x.test/a.mp4" };

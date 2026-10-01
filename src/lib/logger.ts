@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { hostname } from "node:os";
 import { pino, stdSerializers, transport, type DestinationStream, type Logger } from "pino";
 import { env } from "#src/env/base.js";
 import { Prisma } from "#src/generated/prisma/client.js";
@@ -31,7 +32,11 @@ export function serializeError(error: unknown): unknown {
 }
 
 export function createLogger(level: string, destination?: DestinationStream): Logger {
-  return pino({ level, mixin: () => logContext.getStore() ?? {}, serializers: { err: serializeError } }, destination);
+  return pino(
+    // `processId` (pino calls it `pid` by default) is one of the fields every log line is required to carry
+    { level, base: { processId: process.pid, hostname: hostname() }, mixin: () => logContext.getStore() ?? {}, serializers: { err: serializeError } },
+    destination,
+  );
 }
 
 /**

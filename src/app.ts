@@ -13,6 +13,7 @@ import { chatsRouter } from "#src/routes/chats.js";
 import { messagesRouter } from "#src/routes/messages.js";
 import { runsRouter } from "#src/routes/runs.js";
 import { creditsRouter } from "#src/routes/credits.js";
+import { modelsRouter } from "#src/routes/models.js";
 import { healthRouter } from "#src/routes/health.js";
 
 export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number } = {}): Express {
@@ -42,6 +43,7 @@ export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logge
   app.use("/api/chats", chatsRouter);
   app.use("/api", runsRouter);
   app.use("/api/credits", creditsRouter);
+  app.use("/api/models", modelsRouter);
 
   app.use(notFound);
   app.use(errorHandler);

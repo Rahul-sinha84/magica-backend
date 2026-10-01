@@ -28,7 +28,8 @@ describe("pnpm contracts:sync (subprocess)", () => {
   it("syncs into a frontend even when started from another directory", () => {
     const { status, out } = sync(frontend);
     expect(status).toBe(0);
-    expect(out).toMatch(/7 contract files in sync \(7 changed\)/);
+    const count = readdirSync(join(repoRoot, "src/contracts")).filter((file) => file.endsWith(".ts")).length;
+    expect(out).toContain(`${count} contract files in sync (${count} changed)`);
     expect(readdirSync(join(frontend, "contracts"))).toContain("fold.ts");
     expect(existsSync(join(frontend, "contracts.lock.json"))).toBe(true);
   });

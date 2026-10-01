@@ -14,6 +14,7 @@ import {
   CursorQuerySchema,
   ErrorResponseSchema,
   IsoDateTimeSchema,
+  ModelsResponseSchema,
   MessageListResponseSchema,
   MessageSchema,
   RunStatusSchema,
@@ -204,6 +205,8 @@ describe("ContentBlockSchema", () => {
     { type: "reasoning", content: "because" },
     { type: "image", url: "https://x.test/a.png", mimeType: "image/png" },
     { type: "video", url: "https://x.test/a.mp4", width: 1920, height: 1080 },
+    { type: "audio", url: "https://x.test/a.mp3", mimeType: "audio/mpeg", durationMs: 30_000 },
+    { type: "audio", url: "https://x.test/b.wav" },
     { type: "tool_call", toolCallId: "t1", toolName: "gpt_image_2", toolInput: { prompt: "sunset" }, status: "running" },
     { type: "tool_result", toolCallId: "t1", toolName: "gpt_image_2", result: { ok: true } },
     { type: "citation", url: "https://example.com/doc", title: "Doc" },
@@ -219,7 +222,7 @@ describe("ContentBlockSchema", () => {
   });
 
   it("defaults isError to false on a tool result", () => {
-    expect(ContentBlockSchema.parse(valid[6])).toMatchObject({ isError: false });
+    expect(ContentBlockSchema.parse(valid.find((block) => block.type === "tool_result"))).toMatchObject({ isError: false });
   });
 
   it.each([
@@ -322,11 +325,18 @@ describe("runs", () => {
     expect(parsed.run).toBeNull();
   });
 
-  it("parses every metadata status", () => {
-    for (const status of ["thinking", "streaming", "calling-tool", "complete", "failed", "cancelled", "stopping"]) {
+  it("parses every metadata status of the required status model (thinking, working, complete, failed, cancelled, stopping)", () => {
+    for (const status of ["thinking", "working", "complete", "failed", "cancelled", "stopping"]) {
       expect(AgentStreamMetadataSchema.safeParse({ status }).success).toBe(true);
     }
-    expect(AgentStreamMetadataSchema.safeParse({ status: "working" }).success).toBe(false);
+  });
+
+  it.each(["streaming", "calling-tool", "done", ""])("rejects the status %j", (status) => {
+    expect(AgentStreamMetadataSchema.safeParse({ status }).success).toBe(false);
+  });
+
+  it("describes tool activity with currentTool while working", () => {
+    expect(AgentStreamMetadataSchema.safeParse({ status: "working", currentTool: { name: "crop_image", input: { image_url: "https://x.test/a.png" }, status: "running" } }).success).toBe(true);
   });
 });
 
@@ -340,6 +350,7 @@ describe("AgentStreamChunkSchema", () => {
     { type: "tool-end", toolCallId: "t1", status: "failed", errorMessage: "boom" },
     { type: "asset", asset: { type: "image", url: "https://x.test/a.png" } },
     { type: "asset", asset: { type: "video", url: "https://x.test/a.mp4" } },
+    { type: "asset", asset: { type: "audio", url: "https://x.test/a.mp3", durationMs: 4_000 } },
   ])("parses %j", (chunk) => {
     expect(AgentStreamChunkSchema.safeParse(chunk).success).toBe(true);
   });
@@ -379,5 +390,45 @@ describe("contract files stay portable", () => {
     for (const specifier of specifiers) {
       expect(specifier === "zod" || /^\.\/[a-z]+\.js$/.test(specifier ?? "")).toBe(true);
     }
+  });
+});
+
+describe("audio blocks", () => {
+  it("needs a url and keeps an optional duration", () => {
+    expect(ContentBlockSchema.safeParse({ type: "audio" }).success).toBe(false);
+    expect(ContentBlockSchema.safeParse({ type: "audio", url: "https://x.test/a.mp3", durationMs: "long" }).success).toBe(false);
+    expect(ContentBlockSchema.parse({ type: "audio", url: "https://x.test/a.mp3", durationMs: 1_500 })).toEqual({ type: "audio", url: "https://x.test/a.mp3", durationMs: 1_500 });
+  });
+
+  it("survives a message read, next to the other generated media", () => {
+    const blocks = ContentBlocksSchema.parse([
+      { type: "image", url: "https://x.test/a.png" },
+      { type: "audio", url: "https://x.test/a.mp3" },
+      { type: "video", url: "https://x.test/a.mp4" },
+    ]);
+    expect(blocks.map((b) => b.type)).toEqual(["image", "audio", "video"]);
+  });
+});
+
+describe("ModelsResponseSchema", () => {
+  const body = {
+    models: [{ id: "openrouter/free", name: "OpenRouter Free", provider: "openrouter", free: true, isDefault: true }],
+    defaultModelId: "openrouter/free",
+    status: { health: "available", lastRoutedModel: "meta/free-7b", checkedAt: "2026-10-01T10:00:00.000Z" },
+  };
+
+  it("parses the model list with its health", () => {
+    expect(ModelsResponseSchema.safeParse(body).success).toBe(true);
+    expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, lastRoutedModel: null } }).success).toBe(true);
+  });
+
+  it.each(["available", "degraded", "unavailable", "unknown"])("accepts health %j", (health) => {
+    expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, health } }).success).toBe(true);
+  });
+
+  it("rejects an unknown health, a paid model, and another provider", () => {
+    expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, health: "fine" } }).success).toBe(false);
+    expect(ModelsResponseSchema.safeParse({ ...body, models: [{ ...body.models[0], free: false }] }).success).toBe(false);
+    expect(ModelsResponseSchema.safeParse({ ...body, models: [{ ...body.models[0], provider: "openai" }] }).success).toBe(false);
   });
 });

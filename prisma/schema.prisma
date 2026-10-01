@@ -95,6 +95,7 @@ model AgentRun {
 
   @@index([chatId, createdAt(sort: Desc)])
   @@index([triggerMessageId])
+  @@index([completedAt(sort: Desc)]) // the model status reads the most recently ended runs
 }
 
 model ToolInvocation {

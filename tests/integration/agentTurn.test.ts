@@ -86,7 +86,7 @@ describe("a normal turn", () => {
     const blocks = (await reply(turn.assistantMessage.id)).contentBlocks as { type: string; content?: string; durationMs?: number }[];
     expect(blocks.map((b) => b.type)).toEqual(["thinking", "text", "usage"]);
     expect(blocks[0]).toMatchObject({ content: "hm, let me see", durationMs: 2_500 });
-    expect(statuses).toContainEqual({ status: "streaming", thinkingDurationMs: 2_500 });
+    expect(statuses).toContainEqual({ status: "working", thinkingDurationMs: 2_500 });
   });
 
   it("never stores thinking in the reply's plain text", async () => {
@@ -103,7 +103,7 @@ describe("a normal turn", () => {
       { type: "text-delta", delta: "b" },
       { type: "text-delta", delta: "c" },
     ]);
-    expect(statuses.map((s) => s.status)).toEqual(["thinking", "streaming", "complete"]);
+    expect(statuses.map((s) => s.status)).toEqual(["thinking", "working", "complete"]);
   });
 
   it("treats an answer cut off by the length limit as a finished answer", async () => {
@@ -206,6 +206,25 @@ describe("saving the reply as it is written", () => {
     expect(final.content).toBe("Saved before the stop. Written after."); // what had been saved when it was stopped, nothing after
     expect(await releases()).toBe(1);
     expect(await held()).toBe(0);
+  });
+
+  it("reports cancelled when it finds the run was ended elsewhere", async () => {
+    const { payload } = await setupTurn();
+    const { statuses } = await run(payload, [
+      text("a"),
+      { then: () => finalizeRun(payload.agentRunId, { status: "CANCELLED" }).then(() => undefined) },
+      text("b"),
+      finished(),
+    ]);
+    expect(statuses.at(-1)).toEqual({ status: "cancelled" });
+    expect(statuses.map((s) => s.status)).not.toContain("complete");
+  });
+
+  it("reports cancelled, not complete, when the run was ended just before the answer was saved", async () => {
+    const { payload } = await setupTurn();
+    const { result, statuses } = await run(payload, [text("All of it"), { then: () => finalizeRun(payload.agentRunId, { status: "CANCELLED" }).then(() => undefined) }, finished()], { flushEveryMs: 1_000_000 });
+    expect(result).toBe("cancelled");
+    expect(statuses.at(-1)).toEqual({ status: "cancelled" });
   });
 
   it("stops asking the model for more once the run has ended elsewhere", async () => {
@@ -388,6 +407,16 @@ describe("being stopped from outside (a cancel, or running out of time)", () => 
     expect(await runRow(turn.run.id)).toMatchObject({ status: "CANCELLED" });
     expect(await releases()).toBe(1);
     expect(await held()).toBe(0);
+  });
+
+  it("reports stopping as soon as it is told to stop, then cancelled once what was written is saved", async () => {
+    const { turn, payload } = await setupTurn();
+    const controller = new AbortController();
+    const statuses: AgentStreamMetadata[] = [];
+    const model = fakeModel([text("Half. "), { then: () => void controller.abort() }, { wait: 10_000 }, finished()]);
+    await runAgentTurn(payload, { stream: model.stream, emit: () => undefined, setStatus: (s) => void statuses.push(s), triggerRunId: "run_x", signal: controller.signal, flushEveryMs: 1_000_000 });
+    expect(statuses.map((s) => s.status)).toEqual(["thinking", "working", "stopping", "cancelled"]);
+    expect((await reply(turn.assistantMessage.id)).content).toBe("Half. ");
   });
 
   it("does not start the model if it was already stopped when it began", async () => {

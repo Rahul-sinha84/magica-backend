@@ -29,6 +29,8 @@ export const ImageBlockSchema = z.object({ type: z.literal("image"), ...AssetFie
 
 export const VideoBlockSchema = z.object({ type: z.literal("video"), ...AssetFields });
 
+export const AudioBlockSchema = z.object({ type: z.literal("audio"), ...AssetFields, durationMs: z.number().optional() });
+
 export const ToolCallBlockSchema = z.object({
   type: z.literal("tool_call"),
   toolCallId: z.string(),
@@ -72,6 +74,7 @@ export const ContentBlockSchema = z.discriminatedUnion("type", [
   ReasoningBlockSchema,
   ImageBlockSchema,
   VideoBlockSchema,
+  AudioBlockSchema,
   ToolCallBlockSchema,
   ToolResultBlockSchema,
   CitationBlockSchema,
@@ -148,6 +151,7 @@ export type ToolCallBlock = z.infer<typeof ToolCallBlockSchema>;
 export type ToolResultBlock = z.infer<typeof ToolResultBlockSchema>;
 export type ImageBlock = z.infer<typeof ImageBlockSchema>;
 export type VideoBlock = z.infer<typeof VideoBlockSchema>;
+export type AudioBlock = z.infer<typeof AudioBlockSchema>;
 export type UsageBlock = z.infer<typeof UsageBlockSchema>;
 export type SendMessageBody = z.infer<typeof SendMessageBodySchema>;
 export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;

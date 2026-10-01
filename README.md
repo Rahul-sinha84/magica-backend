@@ -107,6 +107,7 @@ All routes except health need `Authorization: Bearer <Clerk session token>`. Err
 |---|---|
 | `GET /api/health` | Checks the database. |
 | `GET /api/credits` | `{ balance, held }`. |
+| `GET /api/models` | The models the agent uses (only `openrouter/free`) and its recent health: `available`, `degraded`, `unavailable` or `unknown`, judged from turns that ended in the last 15 minutes, plus the real model the router used last. Cached for 30 s per process. |
 | `GET /api/chats?cursor&limit` | Pinned first, then most recent activity. |
 | `POST /api/chats` | Creates "New chat". |
 | `GET`, `PATCH`, `DELETE /api/chats/:chatId` | `PATCH` takes `title` and/or `isPinned`. `DELETE` also ends an active run. |
@@ -121,6 +122,8 @@ All routes except health need `Authorization: Bearer <Clerk session token>`. Err
 2. **Dispatch.** After the commit, the API starts the `agent-turn` task, using the run id as Trigger.dev's idempotency key. If that fails, the send is undone and the answer is 503, which means nothing happened. On success the answer is 201 with the ids and a read-only realtime token for this one run (valid for an hour).
 3. **Run.** The worker claims the run (`PENDING` → `RUNNING`) and reads the conversation. It streams the model's answer as chunks on the Trigger.dev stream `chunks` and saves the partial reply about once a second. Saves only touch a reply that is still `STREAMING`, so a late save can never overwrite a reply that ended elsewhere.
 4. **End.** Every ending goes through `finalizeRun`, a compare-and-set that runs once per run. It writes the final reply and status, releases the hold, and records the model and tokens. The worker ends the run itself; the task's failure and cancel hooks cover crashes and time-outs, and cancel, chat delete and stale-run recovery use the same function.
+
+While it runs, the run's metadata follows the required status model: `thinking` → `working` (writing, or using a tool, shown by `currentTool`) → `complete`, `failed` or `cancelled`, with `stopping` while a cancel is carried out.
 
 The browser follows a run live through Trigger.dev realtime. The database is the source of truth, so `active-run` can always rebuild the screen (after a reload, or if realtime drops).
 
@@ -137,7 +140,7 @@ The browser follows a run live through Trigger.dev realtime. The database is the
 - **Auth is Bearer-only.** Cookies are ignored, so there is no CSRF surface. A bad or missing token is 401; Clerk itself being unreachable is 503, so the frontend doesn't sign the user out over an outage. Users are created on first sight (with their Clerk email and starting grant, in one transaction); a small in-process cache skips repeat database hits.
 - **Rate limits are in memory, per process:** 300 requests a minute per user (60 per IP when signed out) and 10 sends a minute. With several instances each has its own counters, so a shared store (Redis) is the next step for a real deployment.
 - **Timeouts everywhere:** 8 s to verify a sign-in with Clerk, 5 s to get a database connection, 15 s per statement, 8 s for each Trigger.dev call, a stall timeout on the model stream, and 10 s for in-flight requests on shutdown.
-- **Logs:** pino, JSON in production and pretty in development. Every request gets a trace id (an incoming `x-trace-id` is honoured if it looks safe). The trace id travels in the task payload, so the API's and the worker's lines for one turn share it, along with `chatId`, `runId` and `messageId`.
+- **Logs:** pino, JSON in production and pretty in development. Every line carries `processId`; every request gets a trace id (an incoming `x-trace-id` is honoured if it looks safe). The trace id travels in the task payload, so the API's and the worker's lines for one turn share it, along with `chatId`, `runId` and `messageId`.
 - **Chat lists are keyset-paginated.** A chat pinned or unpinned during a walk can appear on two pages, so clients de-duplicate by id.
 - **Imports:** `#src/*` (Node subpath imports). The custom `magica-source` condition points them at the TypeScript sources for tsx, tsc, Vitest and the Trigger.dev bundler, and at `dist/` for `pnpm start`.
 

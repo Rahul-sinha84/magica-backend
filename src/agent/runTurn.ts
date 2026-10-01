@@ -84,7 +84,10 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
   setStatus({ status: "thinking" });
 
   const controller = new AbortController();
-  const stop = () => controller.abort(deps.signal.reason);
+  const stop = () => {
+    setStatus({ status: "stopping" }); // the client can show "Stopping…" while what was written is saved
+    controller.abort(deps.signal.reason);
+  };
   if (deps.signal.aborted) stop();
   else deps.signal.addEventListener("abort", stop, { once: true });
 
@@ -130,7 +133,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
         if (thinkingStart !== null) thinkingMs ??= now() - thinkingStart;
         if (!announcedAnswer) {
           announcedAnswer = true;
-          setStatus({ status: "streaming", ...(thinkingMs !== undefined && { thinkingDurationMs: thinkingMs }) });
+          setStatus({ status: "working", ...(thinkingMs !== undefined && { thinkingDurationMs: thinkingMs }) });
         }
       }
       const chunk: AgentStreamChunk = event.type === "reasoning" ? { type: "thinking-delta", delta: event.delta } : { type: "text-delta", delta: event.delta };
@@ -143,6 +146,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
           // the reply is no longer streaming: the run was ended elsewhere (cancelled, deleted, cleaned up), so stop writing
           controller.abort();
           logger.info("the run was ended elsewhere; stopping");
+          setStatus({ status: "cancelled" });
           return "cancelled";
         }
       }
@@ -156,7 +160,8 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
     const model = usage.model ?? env.OPENROUTER_MODEL;
     const final: ContentBlock[] = [...blocks, { type: "usage", inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, model, creditCost: 0 }];
     const ended = await finishWithRetry(runId, { status: "COMPLETED", blocks: final, model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
-    setStatus({ status: "complete" });
+    // not ours to finish: the run was ended elsewhere (cancelled, deleted) just before the answer was saved
+    setStatus({ status: ended ? "complete" : "cancelled" });
     logger.info({ model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }, "agent turn completed");
     return ended ? "completed" : "cancelled";
   } catch (error) {
@@ -165,6 +170,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
     if (controller.signal.aborted || deps.signal.aborted) {
       if (chunks.length > 0) await save();
       logger.info("agent turn stopped");
+      setStatus({ status: "cancelled" });
       return "cancelled";
     }
 
@@ -174,7 +180,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
 
     const partial = snapshot();
     const ended = await finalizeRun(runId, { status: "FAILED", errorCode: code, errorMessage: message, ...(partial.length > 0 && { blocks: partial }) });
-    setStatus({ status: "failed", error: message });
+    setStatus(ended ? { status: "failed", error: message } : { status: "cancelled" });
     return ended ? "failed" : "cancelled";
   } finally {
     deps.signal.removeEventListener("abort", stop);

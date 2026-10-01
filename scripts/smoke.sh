@@ -56,6 +56,9 @@ call GET /api/credits
 expect "credits" 200 '(.balance | type == "number") and (.held | type == "number")'
 held_before=$(echo "$body" | jq -r '.held // 0')
 
+call GET /api/models
+expect "models: only the free router, with its health" 200 '.defaultModelId == "openrouter/free" and ([.models[] | .free] | all) and (.status.health | IN("available","degraded","unavailable","unknown"))'
+
 call POST /api/chats '{}'
 expect "create chat" 201 '.chat.title == "New chat"'
 chat=$(echo "$body" | jq -r '.chat.id // empty')

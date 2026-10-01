@@ -24,6 +24,16 @@ const dbError = () =>
     },
   });
 
+describe("log lines", () => {
+  it("carry the process id as processId (one of the required log fields) and the host", () => {
+    const { log, last } = capture();
+    log.info("hello");
+    expect(last()).toMatchObject({ processId: process.pid, msg: "hello" });
+    expect(typeof last().hostname).toBe("string");
+    expect(last()).not.toHaveProperty("pid");
+  });
+});
+
 describe("error logging", () => {
   it("keeps the code and constraint of a database error but never the row data", () => {
     const { log, text, last } = capture();
