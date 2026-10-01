@@ -3,12 +3,17 @@ import type { AgentStreamChunk, AgentStreamMetadata } from "#src/contracts/index
 import { AGENT_STREAM_ID } from "#src/contracts/index.js";
 import { ChunkQueue } from "#src/agent/chunkQueue.js";
 import { endAfterCancel, endAfterFailure } from "#src/agent/outcomes.js";
-import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
+import { AGENT_TASK_ID, type AgentTurnPayload, type MagicaToolPayload } from "#src/agent/payload.js";
 import { runAgentTurn } from "#src/agent/runTurn.js";
+import { prisma } from "#src/db/client.js";
 import { env } from "#src/env/worker.js";
+import { toolTaskKey } from "#src/lib/idempotency.js";
 import { logContext, logger } from "#src/lib/logger.js";
 import { streamModel } from "#src/lib/openrouter.js";
 import { skills } from "#src/skills/skills.js";
+import { agentTools } from "#src/tools/index.js";
+import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
+import { magicaToolTask } from "#src/trigger/magicaToolTask.js";
 
 // This file runs on Trigger.dev's workers, not in the API, so it must only import what the worker can load (no server
 // environment, no Express, no Clerk). A test checks that.
@@ -21,7 +26,33 @@ const agentStream = streams.define<AgentStreamChunk>({ id: AGENT_STREAM_ID });
 const STREAM_CLOSE_WAIT_MS = 5_000;
 const setStatus = (status: AgentStreamMetadata) => {
   for (const [key, value] of Object.entries(status)) metadata.set(key, value as never);
+  // a status without a running tool (or an error) must not keep showing the previous one
+  if (!status.currentTool) metadata.del("currentTool");
+  if (!status.error) metadata.del("error");
+  // status changes are few (thinking, working, a tool starting or ending, done) and the client shows them, so they are
+  // sent now rather than whenever the SDK next batches its updates
+  void metadata.flush().catch((err: unknown) => logger.warn({ err }, "could not send the run's status"));
 };
+
+/**
+ * Runs a step's Magica tool calls as one batch of durable child tasks, in parallel, and waits for them (Trigger.dev
+ * doesn't count the wait against the turn's time limit). One child task per tool call, whatever happens: the key is
+ * the run and the call. An outcome is matched back by its invocation id, not by position.
+ */
+async function runMagicaCalls(runId: string, calls: MagicaToolPayload[]): Promise<InvocationOutcome[]> {
+  const batch = await magicaToolTask.batchTriggerAndWait(calls.map((payload) => ({ payload, options: { idempotencyKey: toolTaskKey(runId, payload.invocationId) } })));
+  const byInvocation = new Map<string, InvocationOutcome>();
+  for (const run of batch.runs) if (run.ok) byInvocation.set(run.output.invocationId, run.output);
+  return Promise.all(
+    calls.map(async ({ invocationId }) => {
+      const outcome = byInvocation.get(invocationId);
+      if (outcome) return outcome;
+      // the child task failed for good (its failure hook ended the call and released its credits): report what it saved
+      const row = await prisma.toolInvocation.findUnique({ where: { id: invocationId }, select: { status: true, errorMessage: true } });
+      return { status: row?.status === "CANCELLED" ? "CANCELLED" : "FAILED", message: row?.errorMessage ?? "The tool stopped unexpectedly, so nothing was charged. Please try again." } satisfies InvocationOutcome;
+    }),
+  );
+}
 
 export const agentTurn = task({
   id: AGENT_TASK_ID,
@@ -49,6 +80,7 @@ export const agentTurn = task({
           setStatus,
           triggerRunId: ctx.run.id,
           signal,
+          tools: { registry: agentTools, skills: skills().metadata(), runMagicaCalls: (calls) => runMagicaCalls(payload.agentRunId, calls) },
         });
         return { result };
       } finally {

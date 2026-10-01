@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { blocksToText, ContentBlockSchema, type ContentBlock } from "#src/contracts/index.js";
+import { blocksToText, ContentBlockSchema, ContentBlocksSchema, type ContentBlock } from "#src/contracts/index.js";
 import { prisma, type Prisma } from "#src/db/client.js";
 import { holdKey, releaseKey } from "#src/lib/idempotency.js";
 import { logger } from "#src/lib/logger.js";
@@ -50,7 +50,13 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
 
   const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { assistantMessageId: true, userId: true, chatId: true } });
 
-  const blocks = outcome.blocks && z.array(ContentBlockSchema).parse(outcome.blocks); // the server only ever stores valid blocks
+  let blocks = outcome.blocks && z.array(ContentBlockSchema).parse(outcome.blocks); // the server only ever stores valid blocks
+  if (outcome.status !== "COMPLETED") {
+    // a tool can't still be running in a reply that has ended: close any open tool card, so none spins forever
+    const current = blocks ?? ContentBlocksSchema.parse((await tx.message.findUnique({ where: { id: run.assistantMessageId }, select: { contentBlocks: true } }))?.contentBlocks ?? []);
+    const closed = closeOpenTools(current, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended.");
+    if (closed !== current) blocks = closed;
+  }
   await tx.message.update({
     where: { id: run.assistantMessageId },
     data: { status: outcome.status, ...(blocks && { contentBlocks: toJson(blocks), content: blocksToText(blocks) }) },
@@ -70,6 +76,19 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
 
   if (outcome.status === "COMPLETED") await tx.chat.update({ where: { id: run.chatId }, data: { lastMessageAt: new Date() } });
   return true;
+}
+
+/**
+ * Marks every tool call still shown as running (or pending) as failed, with a result saying why, placed right after
+ * it. Returns the same array when nothing was open.
+ */
+export function closeOpenTools(blocks: ContentBlock[], reason: string): ContentBlock[] {
+  const open = blocks.filter((b) => b.type === "tool_call" && (b.status === "running" || b.status === "pending") && !blocks.some((r) => r.type === "tool_result" && r.toolCallId === b.toolCallId));
+  if (open.length === 0) return blocks;
+  return blocks.flatMap((block) => {
+    if (block.type !== "tool_call" || !open.includes(block)) return [block];
+    return [{ ...block, status: "failed" as const }, { type: "tool_result" as const, toolCallId: block.toolCallId, toolName: block.toolName, isError: true, errorMessage: reason }];
+  });
 }
 
 /**

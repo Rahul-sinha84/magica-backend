@@ -35,6 +35,10 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   assets?: (output: TOutput, input?: TInput) => AssetBlock[];
   /** What is stored and shown of the input. Defaults to a generic clean-up (see sanitizeInput). */
   sanitize?: (input: TInput) => Record<string, unknown>;
+  /** The media links the input points at: each must already appear in the conversation (no invented or garbled links). */
+  mediaUrls?: (input: TInput) => string[];
+  /** What the tool card shows of a result (the model still gets the full result). Defaults to a shortened copy. */
+  displayResult?: (output: TOutput) => unknown;
   /** inline tools: runs the tool inside the turn */
   execute?: (input: TInput, context: ToolContext) => Promise<TOutput>;
   /** magica tools: how the call maps onto a Magica model (it runs as a durable child task, see src/tools/magicaTools.ts) */
@@ -157,6 +161,9 @@ export function createToolRegistry(definitions: ToolDefinition[]): ToolRegistry 
     },
   };
 }
+
+/** What a tool card shows of a result. */
+export const displayResult = (tool: ToolDefinition, output: unknown): unknown => (tool.displayResult ? tool.displayResult(output) : sanitizeInput(output));
 
 /** What a tool's input looks like when stored or shown. */
 export const displayInput = (tool: ToolDefinition, input: unknown): Record<string, unknown> =>

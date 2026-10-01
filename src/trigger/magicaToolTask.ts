@@ -17,9 +17,10 @@ export const magicaToolTask = task({
   // started run is resumed, and a call that may have reached Magica is never sent again.
   retry: { maxAttempts: 2 },
 
-  run: async (payload: MagicaToolPayload, { signal }): Promise<InvocationOutcome> => {
+  run: async (payload: MagicaToolPayload, { signal }): Promise<InvocationOutcome & { invocationId: string }> => {
     const context = { traceId: payload.traceId, userId: payload.userId, chatId: payload.chatId, runId: payload.agentRunId };
-    return logContext.run(context, async () => runMagicaInvocation(payload.invocationId, { client: await magica(), registry: agentTools, log: logger, signal }));
+    const outcome = await logContext.run(context, async () => runMagicaInvocation(payload.invocationId, { client: await magica(), registry: agentTools, log: logger, signal }));
+    return { ...outcome, invocationId: payload.invocationId }; // the parent matches outcomes by this, not by position
   },
 
   // the task died or ran out of time (its own code ends the call in every other case): end it and give the credits back

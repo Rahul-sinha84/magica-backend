@@ -19,6 +19,10 @@ const QUIET_MS = 30_000; // no partial reply saved for this long: worth asking T
 // Counted from when the worker started the run, not from the send, so time spent waiting in the queue does not count:
 // the task's maxDuration (10 minutes) plus slack. Nothing legitimate runs longer.
 export const MAX_RUN_MS = 11 * 60_000;
+// Waiting for a tool (a Magica job runs as a child task) doesn't count against the agent task's time limit, so a turn
+// using tools can legitimately run longer. While a tool call is in flight, the limit is that call's own: the Magica
+// tool task's maxDuration (7 minutes) plus slack, counted from when the call was made.
+export const TOOL_CALL_LIMIT_MS = 8 * 60_000;
 const LOOKUP_EVERY_MS = 15_000; // at most one Trigger.dev lookup per run in this window, however often it is polled
 
 // the last answer Trigger.dev gave about each run, so a poll between lookups still knows what it said
@@ -91,12 +95,24 @@ export async function reconcileRun(run: ActiveRun, { force = false, now = Date.n
     return true;
   }
 
-  // whatever Trigger.dev says (or cannot say), nothing is allowed to outlive the task's own time limit
-  if (overLimit) {
+  // whatever Trigger.dev says (or cannot say), nothing is allowed to outlive the task's own time limit, except while it
+  // is waiting for a tool call that is still within that call's own limit
+  if (overLimit && !(await waitingOnATool(run.id, now))) {
     await end(failed("AGENT_TIMEOUT", "The agent took too long. Please try again."));
     return true;
   }
   return false;
+}
+
+/** True while the run has a tool call in flight that is still within the tool call's own time limit. */
+async function waitingOnATool(runId: string, now: number): Promise<boolean> {
+  const latest = await prisma.toolInvocation.findFirst({
+    where: { agentRunId: runId, status: { in: ["PENDING", "DISPATCHING", "RUNNING"] } },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true, dispatchedAt: true },
+  });
+  if (!latest) return false;
+  return now - (latest.dispatchedAt ?? latest.createdAt).getTime() < TOOL_CALL_LIMIT_MS;
 }
 
 /** Looks for the chat's active run and reconciles it. */

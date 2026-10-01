@@ -146,6 +146,29 @@ export const MergeVideosOutputSchema = z.object({
 export const TOOL_NAMES = ["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"] as const;
 export const ToolNameSchema = z.enum(TOOL_NAMES);
 
+/** How each tool is named in the UI (the tool card, the step list). */
+export const TOOL_LABELS: Readonly<Record<(typeof TOOL_NAMES)[number], string>> = {
+  load_skill: "Load skill",
+  read_skill_asset: "Read skill file",
+  gpt_image_2: "GPT Image 2",
+  crop_image: "Crop Image",
+  merge_videos: "Merge Videos",
+};
+
+/**
+ * What a media tool's card shows of its result: the output's link at the top level (`url`), plus its size and, for
+ * several images, every link. The model itself gets the full result.
+ */
+export const MediaResultDisplaySchema = z.object({
+  url: z.url(),
+  urls: z.array(z.url()).optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  mimeType: z.string().optional(),
+  durationMs: z.number().optional(),
+});
+export type MediaResultDisplay = z.infer<typeof MediaResultDisplaySchema>;
+
 export type ToolName = z.infer<typeof ToolNameSchema>;
 export type LoadSkillInput = z.infer<typeof LoadSkillInputSchema>;
 export type LoadSkillOutput = z.infer<typeof LoadSkillOutputSchema>;

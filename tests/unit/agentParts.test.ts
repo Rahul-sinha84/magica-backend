@@ -128,3 +128,24 @@ describe("the system prompt", () => {
     expect(history).toHaveLength(1);
   });
 });
+
+describe("closeOpenTools", () => {
+  it("fails open tool cards with a result right after them, and leaves finished ones and other blocks alone", async () => {
+    const { closeOpenTools } = await import("#src/services/runs.js");
+    const blocks = [
+      { type: "tool_call" as const, toolCallId: "a", toolName: "t", toolInput: {}, status: "pending" as const },
+      { type: "text" as const, content: "x" },
+      { type: "tool_call" as const, toolCallId: "b", toolName: "t", toolInput: {}, status: "completed" as const },
+      { type: "tool_result" as const, toolCallId: "b", toolName: "t", isError: false },
+    ];
+    expect(closeOpenTools(blocks, "Stopped.")).toEqual([
+      { ...blocks[0], status: "failed" },
+      { type: "tool_result", toolCallId: "a", toolName: "t", isError: true, errorMessage: "Stopped." },
+      blocks[1],
+      blocks[2],
+      blocks[3],
+    ]);
+    const nothingOpen = [blocks[1], blocks[2], blocks[3]].filter((b) => b !== undefined);
+    expect(closeOpenTools(nothingOpen, "Stopped.")).toBe(nothingOpen);
+  });
+});

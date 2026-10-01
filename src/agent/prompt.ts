@@ -29,7 +29,7 @@ export function systemPrompt(now: Date, available?: PromptTools): string {
     "You can call these tools. Use one only when the request needs it; otherwise just answer in text.",
     ...available.tools.map((tool) => `- ${tool.name}: ${tool.description}`),
     "Images, videos and audio you create are shown to the user automatically; don't paste their links unless asked.",
-    "Media created earlier in this conversation appears as [Generated image: <url>] (or video / audio). Use those links when the user asks to change or reuse them; never invent a link.",
+    "Media created earlier in this conversation appears as [Generated image: <url>] (or video / audio). Use those links when the user asks to change or reuse them; never invent a link. Never write those [Generated …] lines in your reply: the user already sees the media.",
     "If a tool fails, tell the user plainly what went wrong, using the reason you were given, and suggest a next step. Never claim a result you didn't get.",
   );
   if (available.skills.length) {

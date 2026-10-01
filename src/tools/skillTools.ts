@@ -12,6 +12,8 @@ export const loadSkillTool = defineTool({
   output: LoadSkillOutputSchema,
   kind: "inline",
   creditCost: TOOL_CREDIT_COSTS.load_skill,
+  // the model gets the whole guidance; the tool card only needs to say which skill was loaded
+  displayResult: (output) => ({ skill: output.skill, loaded: true }),
   execute: async ({ name }, { agentRunId }) => {
     const skill = await loadSkill(name, agentRunId);
     return { skill: skill.name, instructions: skill.content };
@@ -25,5 +27,6 @@ export const readSkillAssetTool = defineTool({
   output: ReadSkillAssetOutputSchema,
   kind: "inline",
   creditCost: TOOL_CREDIT_COSTS.read_skill_asset,
+  displayResult: (output) => ({ skill: output.skill, path: output.path, characters: output.content.length }),
   execute: ({ skill, path }) => Promise.resolve(readSkillAsset(skill, path)),
 });

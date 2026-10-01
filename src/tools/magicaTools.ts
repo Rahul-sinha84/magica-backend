@@ -30,6 +30,11 @@ export const gptImage2Tool = defineTool({
   output: GptImage2OutputSchema,
   kind: "magica",
   creditCost: TOOL_CREDIT_COSTS.gpt_image_2,
+  mediaUrls: (input) => input.image_urls ?? [],
+  displayResult: (output) => {
+    const [first] = output.images;
+    return { url: first?.url, ...(output.images.length > 1 && { urls: output.images.map((image) => image.url) }), ...(first?.width && { width: first.width }), ...(first?.height && { height: first.height }), ...(first?.mimeType && { mimeType: first.mimeType }) };
+  },
   assets: (output, input?: GptImage2Input) =>
     output.images.map((image) => ({
       type: "image" as const,
@@ -79,6 +84,8 @@ export const cropImageTool = defineTool({
   output: CropImageOutputSchema,
   kind: "magica",
   creditCost: TOOL_CREDIT_COSTS.crop_image,
+  mediaUrls: (input) => [input.image_url],
+  displayResult: (output) => ({ ...output.image }),
   assets: (output) => [{ type: "image" as const, url: output.image.url, model: "Crop Image", ...(output.image.width && { width: output.image.width }), ...(output.image.height && { height: output.image.height }) }],
   magica: {
     nodeType: "crop_image",
@@ -99,6 +106,8 @@ export const mergeVideosTool = defineTool({
   output: MergeVideosOutputSchema,
   kind: "magica",
   creditCost: TOOL_CREDIT_COSTS.merge_videos,
+  mediaUrls: (input) => input.video_urls,
+  displayResult: (output) => ({ ...output.video }),
   assets: (output) => [{ type: "video" as const, url: output.video.url, model: "Merge Videos", ...(output.video.mimeType && { mimeType: output.video.mimeType }), ...(output.video.width && { width: output.video.width }), ...(output.video.height && { height: output.video.height }) }],
   magica: {
     nodeType: "merge_videos",
