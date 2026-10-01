@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Prisma } from "#src/generated/prisma/client.js";
-import { createLogger, prettyTransport } from "#src/lib/logger.js";
+import { addLogContext, createLogger, logContext, prettyTransport } from "#src/lib/logger.js";
 import { applyServerTimeouts } from "#src/lib/serverTimeouts.js";
 import { createServer } from "node:http";
 
@@ -25,6 +25,39 @@ const dbError = () =>
   });
 
 describe("log lines", () => {
+  it("carry the request's context, but a line's own fields never leak into the lines after it", () => {
+    const chunks: string[] = [];
+    const log = createLogger("info", { write: (c: string) => void chunks.push(c) });
+    const lines = () => chunks.map((c) => JSON.parse(c) as Record<string, unknown>);
+    logContext.run({ traceId: "t1", runId: "r1" }, () => {
+      log.info({ skills: ["a"], rejected: 0 }, "skills available");
+      log.warn({ failure: "RATE_LIMITED", detail: "429" }, "the model could not answer");
+      log.info("run ended");
+      expect(logContext.getStore()).toEqual({ traceId: "t1", runId: "r1" }); // the shared context is untouched
+    });
+    expect(lines()[0]).toMatchObject({ traceId: "t1", runId: "r1", skills: ["a"], rejected: 0 });
+    expect(lines()[1]).toMatchObject({ traceId: "t1", failure: "RATE_LIMITED" });
+    expect(lines()[1]).not.toHaveProperty("skills");
+    expect(lines()[2]).toMatchObject({ traceId: "t1", runId: "r1", msg: "run ended" });
+    for (const key of ["skills", "rejected", "failure", "detail"]) expect(lines()[2]).not.toHaveProperty(key);
+  });
+
+  it("still picks up context added later with addLogContext", () => {
+    const chunks: string[] = [];
+    const log = createLogger("info", { write: (c: string) => void chunks.push(c) });
+    logContext.run({ traceId: "t2" }, () => {
+      addLogContext({ chatId: "c1" });
+      log.info("hello");
+    });
+    expect(JSON.parse(chunks[0] ?? "{}")).toMatchObject({ traceId: "t2", chatId: "c1" });
+  });
+
+  it("work outside any request context", () => {
+    const chunks: string[] = [];
+    createLogger("info", { write: (c: string) => void chunks.push(c) }).info({ a: 1 }, "outside");
+    expect(JSON.parse(chunks[0] ?? "{}")).toMatchObject({ a: 1, msg: "outside" });
+  });
+
   it("carry the process id as processId (one of the required log fields) and the host", () => {
     const { log, last } = capture();
     log.info("hello");

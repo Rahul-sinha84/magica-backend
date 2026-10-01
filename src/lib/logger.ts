@@ -34,7 +34,7 @@ export function serializeError(error: unknown): unknown {
 export function createLogger(level: string, destination?: DestinationStream): Logger {
   return pino(
     // `processId` (pino calls it `pid` by default) is one of the fields every log line is required to carry
-    { level, base: { processId: process.pid, hostname: hostname() }, mixin: () => logContext.getStore() ?? {}, serializers: { err: serializeError } },
+    { level, base: { processId: process.pid, hostname: hostname() }, mixin: () => ({ ...logContext.getStore() }), serializers: { err: serializeError } },
     destination,
   );
 }

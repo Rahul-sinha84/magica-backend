@@ -8,9 +8,13 @@ import { runAgentTurn } from "#src/agent/runTurn.js";
 import { env } from "#src/env/worker.js";
 import { logContext, logger } from "#src/lib/logger.js";
 import { streamModel } from "#src/lib/openrouter.js";
+import { skills } from "#src/skills/skills.js";
 
 // This file runs on Trigger.dev's workers, not in the API, so it must only import what the worker can load (no server
 // environment, no Express, no Clerk). A test checks that.
+
+// Read and check the agent's skills when the worker starts, so a bad skill is reported at boot, not mid-conversation.
+skills();
 
 const agentStream = streams.define<AgentStreamChunk>({ id: AGENT_STREAM_ID });
 
@@ -31,6 +35,8 @@ export const agentTurn = task({
   run: async (payload: AgentTurnPayload, { ctx, signal }) => {
     const context = { traceId: payload.traceId, userId: payload.userId, chatId: payload.chatId, runId: payload.agentRunId, messageId: payload.assistantMessageId };
     return logContext.run(context, async () => {
+      // shown in the run's logs (logs written while the worker boots aren't), so the loaded skills are easy to confirm
+      logger.info({ skills: skills().metadata().map((skill) => skill.name), rejected: skills().rejected().length }, "skills available");
       const queue = new ChunkQueue<AgentStreamChunk>();
       const delivered = agentStream
         .pipe(queue, { signal })

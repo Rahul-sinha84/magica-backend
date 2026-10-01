@@ -1,3 +1,4 @@
+import { additionalFiles } from "@trigger.dev/build/extensions/core";
 import { defineConfig } from "@trigger.dev/sdk";
 
 // The CLI evaluates this file before anything loads .env.local for it. The file is optional (real hosts set variables).
@@ -18,5 +19,7 @@ export default defineConfig({
     conditions: ["magica-source"],
     // kept out of the bundle: the database driver and its generated client load native/wasm files, and pino uses threads
     external: ["@prisma/client", "@prisma/adapter-pg", "pg", "pino", "pino-pretty"],
+    // the worker reads the agent's skills from disk at startup, so a deploy must ship them next to the code
+    extensions: [additionalFiles({ files: ["./agent-skills/**"] })],
   },
 });

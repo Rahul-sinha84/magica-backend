@@ -235,6 +235,9 @@ function createRetryTurn(userId: string, original: { id: string; chatId: string;
       data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, retryOfRunId: original.id },
     });
     await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold (retry)", idempotencyKey: holdKey(run.id), agentRunId: run.id });
+    // a retry follows the same guidance as the attempt it retries: it starts with that run's loaded skills, text and all
+    const inherited = await tx.runSkill.findMany({ where: { agentRunId: original.id }, select: { skillName: true, content: true, contentHash: true } });
+    if (inherited.length > 0) await tx.runSkill.createMany({ data: inherited.map((skill) => ({ ...skill, agentRunId: run.id })) });
     await tx.chat.update({ where: { id: chatId }, data: { lastMessageAt: replyAt } });
     return { userMessage, assistantMessage, run, replyAt, provisionalTitle: null, newQuestion: false };
   });
