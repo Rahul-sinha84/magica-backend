@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.28.2",
   "engines": {
     "node": ">=22.12"
   },
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "^11.9.0",
+      "version": "11.28.2",
       "onFail": "download"
     }
   },
@@ -24,6 +25,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --no-experimental-webstorage --env-file-if-exists=.env.local dist/server.js",
     "trigger:dev": "NODE_OPTIONS=--no-experimental-webstorage trigger dev --env-file .env.local",
+    "trigger:deploy": "NODE_OPTIONS=--no-experimental-webstorage trigger deploy",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest",

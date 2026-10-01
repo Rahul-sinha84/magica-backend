@@ -14,6 +14,9 @@ export const BaseEnvSchema = z.object({
   // Connections per process. Every Trigger.dev run is its own process, so with many turns at once keep this small
   // (1-2) on the worker and put a pooler (PgBouncer, Neon's pooled URL) in front of Postgres.
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  // Longest a single SQL statement may run. Sent when connecting; some connection poolers reject that, so 0 doesn't
+  // send it (set it on the database role instead: ALTER ROLE <role> SET statement_timeout = '15s').
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(15_000),
   // The trial forbids paid LLM routes, so anything but the free router is a boot failure in every process.
   OPENROUTER_MODEL: z
     .literal("openrouter/free", { error: 'must be "openrouter/free" (paid models are not allowed)' })

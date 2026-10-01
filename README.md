@@ -53,6 +53,9 @@ Clerk prints a telemetry notice with development keys; set `CLERK_TELEMETRY_DISA
 |---|---|
 | `pnpm dev` / `pnpm start` | API with reload / the built API (`pnpm build` first). |
 | `pnpm trigger:dev` | The Trigger.dev dev worker, reading `.env.local`. |
+| `pnpm trigger:deploy` | Deploys the worker to Trigger.dev production (see [Deploying](#deploying)). |
+| `pnpm skills:check` | Checks `agent-skills/` exactly as the worker loads it. |
+| `pnpm magica:try` | Runs each Magica tool once against the real API (uses credits). |
 | `pnpm test:run`, `test:unit`, `test:integration` | All tests / one project. Integration tests need `pnpm db:up`. |
 | `pnpm typecheck`, `pnpm lint` | |
 | `pnpm db:up`, `db:down`, `db:reset` | Local Postgres (`db:reset` deletes the data). `POSTGRES_PORT` changes the port if 5432 is taken. |
@@ -177,6 +180,66 @@ The database needs one setting for this: every Trigger.dev run is its own proces
 - HTTP tests bind to `127.0.0.1` explicitly: supertest's default random port on all interfaces sometimes reached other local apps.
 
 Real Clerk verification, real Trigger.dev and real OpenRouter traffic are checked by hand (the manual checks in issue #1).
+
+## Deploying
+
+Four services, set up in this order: the database, the worker, the API, then the frontend. Every step uses the
+`development` branch.
+
+### 1. Database (Neon)
+Create a Neon project (in the region you'll run the API in). Neon gives two connection strings:
+- the **pooled** one (host contains `-pooler`): the app uses it as `DATABASE_URL`;
+- the **direct** one: migrations use it as `DIRECT_URL`, because migrations must bypass the pooler.
+
+Our client sends a 15 s statement timeout when it connects. If the pooler rejects that ("unsupported startup
+parameter"), set `DATABASE_STATEMENT_TIMEOUT_MS=0` and put the limit on the database role instead, which works
+through any pooler: `ALTER ROLE <your role> SET statement_timeout = '15s';`
+
+### 2. Worker (Trigger.dev production)
+In the Trigger.dev dashboard, open the **Production** environment's variables and set:
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | Neon's pooled URL |
+| `DATABASE_POOL_MAX` | `2` (every run is its own process; the pooler multiplexes them) |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | `15000`, or `0` (see above) |
+| `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | your key; `openrouter/free` |
+| `MAGICA_API_KEY`, `MAGICA_BASE_URL` | your key; `https://inference.magica.com` |
+| `AGENT_CONCURRENCY_LIMIT` | `20` |
+| `NODE_ENV`, `LOG_LEVEL` | `production`, `info` |
+
+Then deploy from this repo: `pnpm trigger:deploy` (it reads `TRIGGER_PROJECT_REF` from `.env.local`; run
+`pnpm exec trigger login` first if needed). The dashboard should then list the `agent-turn` and `magica-tool` tasks.
+`pnpm exec trigger deploy --dry-run` builds the same bundle without deploying, to check it first.
+
+### 3. API (Railway)
+Create a Railway project from the GitHub repo (`development` branch). `railway.json` sets everything else: build
+(`pnpm build`), migrations before each deploy (`pnpm db:deploy`), start (`pnpm start`), and the health check
+(`/api/health`). Set the service's variables:
+
+| Variable | Value |
+|---|---|
+| `NODE_ENV` | `production` |
+| `DATABASE_URL`, `DIRECT_URL` | Neon's pooled and direct URLs |
+| `DATABASE_POOL_MAX` | `10` |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | as for the worker |
+| `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` | the same Clerk instance as the frontend |
+| `TRIGGER_SECRET_KEY` | the **production** secret key (`tr_prod_…`), so runs go to the deployed worker |
+| `FRONTEND_ORIGIN` | the frontend's URL (set after step 4; until then, anything) |
+| `TRUST_PROXY` | `1` (Railway runs one proxy in front) |
+| `CREDIT_STARTING_BALANCE`, `CREDIT_ADMISSION_HOLD` | optional; default 30,000,000 and 100,000 |
+
+Railway sets `PORT`. Generate a public domain for the service, then check `https://<domain>/api/health`.
+
+### 4. Frontend (Vercel)
+Deploy `../magica-frontend` with `NEXT_PUBLIC_BACKEND_URL` set to the API's URL (plus its Clerk keys, see its README).
+Then set the API's `FRONTEND_ORIGIN` to the frontend's production URL, exactly as the browser shows it (no trailing
+slash), and redeploy the API. CORS and Clerk's `authorizedParties` both allow only that one origin, so Vercel preview
+deployments (other URLs) are refused by design.
+
+### 5. Check it
+`TEST_TOKEN=<token from the deployed frontend> BASE_URL=https://<api domain> pnpm smoke`, then a real image turn in the
+deployed app.
 
 ## What I'd do with more time
 

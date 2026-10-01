@@ -194,6 +194,12 @@ describe("worker env", () => {
     expect(parseServer()).not.toHaveProperty("MAGICA_API_KEY");
   });
 
+  it("defaults the statement time limit to 15 s, allows 0 (don't send it), and refuses nonsense", () => {
+    expect(parseEnv(WorkerEnvSchema, worker).DATABASE_STATEMENT_TIMEOUT_MS).toBe(15_000);
+    expect(parseEnv(WorkerEnvSchema, { ...worker, DATABASE_STATEMENT_TIMEOUT_MS: "0" }).DATABASE_STATEMENT_TIMEOUT_MS).toBe(0);
+    for (const bad of ["-1", "1.5", "soon", "600001"]) expect(() => parseEnv(WorkerEnvSchema, { ...worker, DATABASE_STATEMENT_TIMEOUT_MS: bad })).toThrow(/DATABASE_STATEMENT_TIMEOUT_MS/);
+  });
+
   it("rejects paid models too", () => {
     expect(() => parseEnv(WorkerEnvSchema, { ...worker, OPENROUTER_MODEL: "openrouter/auto" })).toThrow(
       /openrouter\/free/,

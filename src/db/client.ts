@@ -9,7 +9,7 @@ export const prisma = new PrismaClient({
     max: env.DATABASE_POOL_MAX,
     // Without these a stuck query or an exhausted pool hangs the request (and everything waiting on it) forever.
     connectionTimeoutMillis: 5_000,
-    statement_timeout: 15_000,
+    ...(env.DATABASE_STATEMENT_TIMEOUT_MS > 0 && { statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS }),
   }),
   log: env.LOG_LEVEL === "trace" ? ["query", "warn", "error"] : ["warn", "error"],
 });
