@@ -281,8 +281,16 @@ describe("credits held by runs that are really dead", () => {
 
   it("also frees credits held by a run nobody ever picked up", async () => {
     const { target } = await poorUserWithARunElsewhere({ triggerRunId: "run_never_started", quietMs: START_TIMEOUT_MS, ageMs: START_TIMEOUT_MS + 5_000, status: "PENDING" });
-    trigger.statuses.set("run_never_started", "QUEUED");
+    trigger.statuses.set("run_never_started", "PENDING_VERSION");
     expect((await send("u1", target.id, { content: "there is room again" })).status).toBe(201);
+  });
+
+  it("does not take credits from a run that is only waiting in the queue", async () => {
+    const { target, turn } = await poorUserWithARunElsewhere({ triggerRunId: "run_waiting", quietMs: START_TIMEOUT_MS, ageMs: START_TIMEOUT_MS + 5_000, status: "PENDING" });
+    trigger.statuses.set("run_waiting", "QUEUED");
+    const res = await send("u1", target.id, { content: "no room yet" });
+    expect(res.status).toBe(402);
+    expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: turn.run.id } })).toMatchObject({ status: "PENDING" });
   });
 
   it("does not take credits from a run that is alive", async () => {

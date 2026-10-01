@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ActiveRunResponseSchema, ContentBlockSchema, ErrorResponseSchema } from "#src/contracts/index.js";
 import { prisma } from "#src/db/client.js";
-import { MAX_RUN_MS, START_TIMEOUT_MS } from "#src/services/reconcile.js";
+import { MAX_RUN_MS, QUEUE_LIMIT_MS, START_TIMEOUT_MS } from "#src/services/reconcile.js";
 import { finalizeRun } from "#src/services/runs.js";
 import { as } from "../helpers/app.js";
 import { activeTurn, fixtures, resetDb } from "../helpers/db.js";
@@ -328,13 +328,77 @@ describe("a run that is really dead must not look alive, or lock the chat", () =
   });
 });
 
-describe("a run the agent never picks up (no worker deployed or running)", () => {
-  const stuck = (extra: Parameters<typeof activeTurn>[2] = {}) => ({ status: "PENDING" as const, triggerRunId: "run_queued", ageMs: START_TIMEOUT_MS + 60_000, quietMs: START_TIMEOUT_MS, ...extra });
+describe("a run waiting in Trigger.dev's queue (many turns at once)", () => {
+  const waiting = (extra: Parameters<typeof activeTurn>[2] = {}) => ({ status: "PENDING" as const, triggerRunId: "run_queued", ageMs: START_TIMEOUT_MS + 60_000, quietMs: START_TIMEOUT_MS, ...extra });
 
-  it.each(["QUEUED", "PENDING_VERSION", "DEQUEUED", "DELAYED", "WAITING"])("is ended with a clear message when Trigger.dev still shows it as %s", async (triggerStatus) => {
+  it.each(["QUEUED", "DELAYED", "DEQUEUED", "WAITING", "EXECUTING"])("is never ended just for waiting while Trigger.dev shows it as %s", async (triggerStatus) => {
+    const { chat } = await setup();
+    const { run } = await activeTurn(chat.id, "u1", waiting({ ageMs: QUEUE_LIMIT_MS - 30_000 }));
+    trigger.statuses.set("run_queued", triggerStatus);
+
+    const { body } = await activeRun(chat.id);
+    expect(body.run).toMatchObject({ id: run.id, status: "PENDING" }); // the client can show it as waiting its turn
+    expect(await runOf(run.id)).toMatchObject({ status: "PENDING" });
+    expect(await heldOf()).toBe(HOLD);
+    expect(trigger.cancelled).toEqual([]);
+  });
+
+  it("keeps the chat busy while it waits: a second send is still 409", async () => {
+    const { chat } = await setup();
+    await activeTurn(chat.id, "u1", waiting());
+    trigger.statuses.set("run_queued", "QUEUED");
+    const res = await as("u1").post(`/api/chats/${chat.id}/messages`).send({ content: "me too" });
+    expect(res.status).toBe(409);
+    expect(ErrorResponseSchema.parse(res.body).code).toBe("RUN_ACTIVE");
+  });
+
+  it("is ended once it has waited past the point where Trigger.dev drops it, even if Trigger.dev cannot be asked", async () => {
+    const { chat } = await setup();
+    const { run } = await activeTurn(chat.id, "u1", waiting({ ageMs: QUEUE_LIMIT_MS - 2_000 }));
+    trigger.statuses.set("run_queued", null);
+    expect((await activeRun(chat.id)).body.run).not.toBeNull();
+
+    await prisma.agentRun.update({ where: { id: run.id }, data: { createdAt: new Date(Date.now() - QUEUE_LIMIT_MS - 1_000) } });
+    expect((await activeRun(chat.id)).body.run).toBeNull();
+    expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_NOT_STARTED" });
+    expect(trigger.cancelled).toEqual(["run_queued"]);
+    expect(await heldOf()).toBe(0);
+  });
+
+  it("is ended with Trigger.dev's own reason once Trigger.dev drops it (EXPIRED)", async () => {
+    const { chat } = await setup();
+    const { run } = await activeTurn(chat.id, "u1", waiting());
+    trigger.statuses.set("run_queued", "EXPIRED");
+    expect((await activeRun(chat.id)).body.run).toBeNull();
+    expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_EXPIRED", errorMessage: "The agent couldn't start in time. Please try again." });
+    expect(trigger.cancelled).toEqual([]); // already gone from Trigger.dev's queue
+  });
+
+  it("does not count the time spent waiting against the run's time limit once it starts", async () => {
+    const { chat } = await setup();
+    // waited 9 minutes in the queue, then started 2 minutes ago: 11 minutes since the send, but only 2 running
+    const { run } = await activeTurn(chat.id, "u1", { status: "RUNNING", triggerRunId: "run_late", ageMs: 11 * 60_000, quietMs: 1_000, startedAt: new Date(Date.now() - 2 * 60_000) });
+    trigger.statuses.set("run_late", null);
+    expect((await activeRun(chat.id)).body.run).toMatchObject({ id: run.id, status: "RUNNING" });
+    expect(await runOf(run.id)).toMatchObject({ status: "RUNNING" });
+  });
+
+  it("still ends a started run that has run past the limit, counted from when it started", async () => {
+    const { chat } = await setup();
+    const { run } = await activeTurn(chat.id, "u1", { status: "RUNNING", triggerRunId: "run_long", ageMs: MAX_RUN_MS + 5 * 60_000, quietMs: 1_000, startedAt: new Date(Date.now() - MAX_RUN_MS - 1_000) });
+    trigger.statuses.set("run_long", null);
+    expect((await activeRun(chat.id)).body.run).toBeNull();
+    expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_TIMEOUT" });
+  });
+});
+
+describe("a run no worker can ever take (the task is not deployed)", () => {
+  const stuck = (extra: Parameters<typeof activeTurn>[2] = {}) => ({ status: "PENDING" as const, triggerRunId: "run_orphan", ageMs: START_TIMEOUT_MS + 60_000, quietMs: START_TIMEOUT_MS, ...extra });
+
+  it("is ended after three minutes with a clear message when Trigger.dev reports PENDING_VERSION", async () => {
     const { chat } = await setup();
     const { run, assistantMessage } = await activeTurn(chat.id, "u1", stuck());
-    trigger.statuses.set("run_queued", triggerStatus);
+    trigger.statuses.set("run_orphan", "PENDING_VERSION");
 
     expect((await activeRun(chat.id)).body.run).toBeNull();
     expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_NOT_STARTED", errorMessage: "The agent isn't running right now. Please try again in a moment." });
@@ -345,23 +409,15 @@ describe("a run the agent never picks up (no worker deployed or running)", () =>
   it("takes the run off Trigger.dev's queue too, so it cannot start later against a turn that is already over", async () => {
     const { chat } = await setup();
     await activeTurn(chat.id, "u1", stuck());
-    trigger.statuses.set("run_queued", "PENDING_VERSION");
+    trigger.statuses.set("run_orphan", "PENDING_VERSION");
     await activeRun(chat.id);
-    expect(trigger.cancelled).toEqual(["run_queued"]);
-  });
-
-  it("does not need Trigger.dev to answer", async () => {
-    const { chat } = await setup();
-    const { run } = await activeTurn(chat.id, "u1", stuck());
-    trigger.statuses.set("run_queued", null);
-    expect((await activeRun(chat.id)).body.run).toBeNull();
-    expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_NOT_STARTED" });
+    expect(trigger.cancelled).toEqual(["run_orphan"]);
   });
 
   it("waits the full three minutes: just under is left alone, just over is ended", async () => {
     const { chat } = await setup();
     const { run } = await activeTurn(chat.id, "u1", stuck({ ageMs: START_TIMEOUT_MS - 2_000 }));
-    trigger.statuses.set("run_queued", "QUEUED");
+    trigger.statuses.set("run_orphan", "PENDING_VERSION");
     expect((await activeRun(chat.id)).body.run).not.toBeNull();
     expect(await runOf(run.id)).toMatchObject({ status: "PENDING" });
     expect(await heldOf()).toBe(HOLD);
@@ -369,6 +425,19 @@ describe("a run the agent never picks up (no worker deployed or running)", () =>
     await prisma.agentRun.update({ where: { id: run.id }, data: { createdAt: new Date(Date.now() - START_TIMEOUT_MS - 1_000) } });
     expect((await activeRun(chat.id)).body.run).toBeNull();
     expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_NOT_STARTED" });
+  });
+
+  it("remembers what Trigger.dev said between lookups, so a poll that does not ask still acts on it", async () => {
+    const { chat } = await setup();
+    const { run } = await activeTurn(chat.id, "u1", stuck({ ageMs: START_TIMEOUT_MS - 2_000 }));
+    trigger.statuses.set("run_orphan", "PENDING_VERSION");
+    await activeRun(chat.id); // asks Trigger.dev, too early to act
+    expect(trigger.statusLookups).toHaveLength(1);
+
+    await prisma.agentRun.update({ where: { id: run.id }, data: { createdAt: new Date(Date.now() - START_TIMEOUT_MS - 1_000) } });
+    expect((await activeRun(chat.id)).body.run).toBeNull(); // within the lookup window: no second question needed
+    expect(trigger.statusLookups).toHaveLength(1);
+    expect(await runOf(run.id)).toMatchObject({ errorCode: "AGENT_NOT_STARTED" });
   });
 
   it("does not apply to a run that has started, however long it takes", async () => {
@@ -380,17 +449,10 @@ describe("a run the agent never picks up (no worker deployed or running)", () =>
     expect(trigger.cancelled).toEqual([]);
   });
 
-  it("applies even if a stray progress write touched the reply, because a pending run never started", async () => {
-    const { chat } = await setup();
-    const { run } = await activeTurn(chat.id, "u1", stuck({ quietMs: 500 }));
-    expect((await activeRun(chat.id)).body.run).toBeNull();
-    expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_NOT_STARTED" });
-  });
-
   it("leaves a more specific reason alone: a run Trigger.dev reports as crashed is a crash, not 'never started'", async () => {
     const { chat } = await setup();
     const { run } = await activeTurn(chat.id, "u1", stuck());
-    trigger.statuses.set("run_queued", "CRASHED");
+    trigger.statuses.set("run_orphan", "CRASHED");
     await activeRun(chat.id);
     expect(await runOf(run.id)).toMatchObject({ status: "FAILED", errorCode: "AGENT_CRASHED" });
     expect(trigger.cancelled).toEqual([]); // it is already over on Trigger.dev's side
@@ -399,11 +461,11 @@ describe("a run the agent never picks up (no worker deployed or running)", () =>
   it("frees the chat and the credits straight away, cancelling on Trigger.dev only once however many clients poll", async () => {
     const { chat } = await setup();
     await activeTurn(chat.id, "u1", stuck());
-    trigger.statuses.set("run_queued", "QUEUED");
+    trigger.statuses.set("run_orphan", "PENDING_VERSION");
     const results = await Promise.all(Array.from({ length: 6 }, () => activeRun(chat.id)));
     expect(results.every(({ res, body }) => res.status === 200 && body.run === null)).toBe(true);
     expect(await ledger(["RELEASE"])).toHaveLength(1);
-    expect(trigger.cancelled).toEqual(["run_queued"]);
+    expect(trigger.cancelled).toEqual(["run_orphan"]);
     expect(await heldOf()).toBe(0);
     expect((await as("u1").post(`/api/chats/${chat.id}/messages`).send({ content: "try again" })).status).toBe(201);
   });

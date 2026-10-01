@@ -11,6 +11,9 @@ export const BaseEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+  // Connections per process. Every Trigger.dev run is its own process, so with many turns at once keep this small
+  // (1-2) on the worker and put a pooler (PgBouncer, Neon's pooled URL) in front of Postgres.
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
   // The trial forbids paid LLM routes, so anything but the free router is a boot failure in every process.
   OPENROUTER_MODEL: z
     .literal("openrouter/free", { error: 'must be "openrouter/free" (paid models are not allowed)' })
@@ -39,6 +42,9 @@ export const ServerEnvSchema = BaseEnvSchema.extend({
 export const WorkerEnvSchema = BaseEnvSchema.extend({
   OPENROUTER_API_KEY: key,
   OPENROUTER_BASE_URL: z.url().default("https://openrouter.ai/api/v1"),
+  // How many turns run at once; the rest wait in Trigger.dev's queue (and never fail for waiting). The free model's
+  // rate limit is the real ceiling, so raising this mostly turns waiting into 429s. Read when the task is indexed.
+  AGENT_CONCURRENCY_LIMIT: z.coerce.number().int().min(1).max(1000).default(20),
 });
 
 // Values are trimmed; blank ones (e.g. `KEY=` copied from .env.example) count as missing, not as empty strings.

@@ -6,6 +6,7 @@ import { PrismaClient } from "#src/generated/prisma/client.js";
 export const prisma = new PrismaClient({
   adapter: new PrismaPg({
     connectionString: env.DATABASE_URL,
+    max: env.DATABASE_POOL_MAX,
     // Without these a stuck query or an exhausted pool hangs the request (and everything waiting on it) forever.
     connectionTimeoutMillis: 5_000,
     statement_timeout: 15_000,

@@ -120,6 +120,22 @@ describe("worker env", () => {
     expect(() => parseEnv(WorkerEnvSchema, db)).toThrow(/OPENROUTER_API_KEY/);
   });
 
+  it("defaults to 20 turns at once and 10 database connections, and accepts other sensible values", () => {
+    expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 20, DATABASE_POOL_MAX: 10 });
+    expect(parseEnv(WorkerEnvSchema, { ...worker, AGENT_CONCURRENCY_LIMIT: "1000", DATABASE_POOL_MAX: "1" })).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 1000, DATABASE_POOL_MAX: 1 });
+  });
+
+  it.each([
+    ["AGENT_CONCURRENCY_LIMIT", "0"],
+    ["AGENT_CONCURRENCY_LIMIT", "1001"],
+    ["AGENT_CONCURRENCY_LIMIT", "2.5"],
+    ["AGENT_CONCURRENCY_LIMIT", "lots"],
+    ["DATABASE_POOL_MAX", "0"],
+    ["DATABASE_POOL_MAX", "101"],
+  ])("rejects %s=%s", (key, value) => {
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, [key]: value })).toThrow(new RegExp(key));
+  });
+
   it("rejects paid models too", () => {
     expect(() => parseEnv(WorkerEnvSchema, { ...worker, OPENROUTER_MODEL: "openrouter/auto" })).toThrow(
       /openrouter\/free/,

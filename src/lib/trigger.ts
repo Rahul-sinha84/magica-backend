@@ -1,5 +1,5 @@
 import { auth, configure, runs, tasks } from "@trigger.dev/sdk";
-import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
+import { AGENT_QUEUE_TTL_SECONDS, AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
 import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
 
@@ -29,7 +29,11 @@ async function withTimeout<T>(work: Promise<T>, what: string): Promise<T> {
  * decides how long to wait (see `sendMessage`), because what to do about a slow answer is its call.
  */
 export async function dispatchAgentTurn(payload: AgentTurnPayload, idempotencyKey: string): Promise<string> {
-  const handle = await tasks.trigger(AGENT_TASK_ID, payload, { idempotencyKey, tags: [`chat_${payload.chatId}`, `user_${payload.userId}`] });
+  const handle = await tasks.trigger(AGENT_TASK_ID, payload, {
+    idempotencyKey,
+    ttl: AGENT_QUEUE_TTL_SECONDS, // a turn nobody starts in time is dropped by Trigger.dev and reported as EXPIRED
+    tags: [`chat_${payload.chatId}`, `user_${payload.userId}`],
+  });
   return handle.id;
 }
 

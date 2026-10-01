@@ -5,6 +5,7 @@ import { ChunkQueue } from "#src/agent/chunkQueue.js";
 import { endAfterCancel, endAfterFailure } from "#src/agent/outcomes.js";
 import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
 import { runAgentTurn } from "#src/agent/runTurn.js";
+import { env } from "#src/env/worker.js";
 import { logContext, logger } from "#src/lib/logger.js";
 import { streamModel } from "#src/lib/openrouter.js";
 
@@ -25,7 +26,7 @@ export const agentTurn = task({
   maxDuration: 600,
   retry: { maxAttempts: 1 },
   // the free model is rate limited, so a burst waits in the queue instead of everyone hitting it at once
-  queue: { concurrencyLimit: 20 },
+  queue: { concurrencyLimit: env.AGENT_CONCURRENCY_LIMIT },
 
   run: async (payload: AgentTurnPayload, { ctx, signal }) => {
     const context = { traceId: payload.traceId, userId: payload.userId, chatId: payload.chatId, runId: payload.agentRunId, messageId: payload.assistantMessageId };

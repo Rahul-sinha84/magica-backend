@@ -33,6 +33,7 @@ Everything lives in `.env.local`. `.env.example` lists each variable with a comm
 | Variable | Used by | Notes |
 |---|---|---|
 | `DATABASE_URL` | both | Postgres URL. |
+| `DATABASE_POOL_MAX` | both | Connections per process (default 10). See [Many turns at once](#many-turns-at-once). |
 | `OPENROUTER_MODEL` | both | Must be `openrouter/free`; anything else, including paid routers, is refused at boot. |
 | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` | API | Same Clerk instance as the frontend. |
 | `FRONTEND_ORIGIN` | API | Exact browser origin (CORS and Clerk `authorizedParties`); default `http://localhost:3001`. |
@@ -40,6 +41,7 @@ Everything lives in `.env.local`. `.env.example` lists each variable with a comm
 | `TRUST_PROXY` | API | Number of reverse proxies in front (0 locally, 1 on Railway and similar), so rate limits see the real client IP. |
 | `CREDIT_STARTING_BALANCE`, `CREDIT_ADMISSION_HOLD` | API | 30,000,000 and 100,000 by default. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` | worker | |
+| `AGENT_CONCURRENCY_LIMIT` | worker | Turns that run at once (default 20); the rest wait in the queue. Read when the task is indexed, so set it in the Trigger.dev environment too. |
 | `TRIGGER_PROJECT_REF` | `trigger.config.ts` only | |
 | `TEST_DATABASE_URL` | tests | Defaults to `magica_test` on the local container. |
 
@@ -128,7 +130,7 @@ The browser follows a run live through Trigger.dev realtime. The database is the
 - **One active run per chat, enforced by the database** (a partial unique index), not by a check-then-insert that two requests could both pass.
 - **Idempotent send.** The client picks `clientMessageId`. Sending it again returns the same turn with 200; the same id with different text is a 400; a retry after a failed run needs a new id.
 - **Credits are held at send and released at the end.** Each turn costs 0 credits for now, because the free router has no price; the hold only admits a turn. Credits held by a run that died are reclaimed when a send would otherwise be refused for lack of credit.
-- **Stale runs recover themselves.** A run that was never dispatched is ended after 60 s, and one no worker picked up after 3 minutes (its Trigger.dev queue entry is cancelled). A run with no saved progress for 30 s is checked with Trigger.dev, at most every 15 s. Nothing lives past 11 minutes (the task's 10-minute limit plus slack). This happens on demand, when `active-run` is read or a send finds the chat busy (or the user short of credit), so there is no background job to run or monitor.
+- **Stale runs recover themselves, but waiting is not stale.** A run that was never dispatched is ended after 60 s. A run waiting in Trigger.dev's queue is left alone however busy it is; each run is dispatched with a 10-minute queue TTL, after which Trigger.dev drops it as `EXPIRED` and we end it with a safe message (and end it ourselves at 11 minutes if Trigger.dev can't be asked). Only a run no worker can ever take (Trigger.dev reports `PENDING_VERSION`: the task isn't deployed) is ended after 3 minutes, and its queue entry is cancelled. A run with no saved progress for 30 s is checked with Trigger.dev, at most every 15 s. A started run never lives past 11 minutes counted from when it started (the task's 10-minute limit plus slack), so time spent in the queue doesn't count. This happens on demand, when `active-run` is read or a send finds the chat busy (or the user short of credit), so there is no background job to run or monitor.
 - **The model is retried only before the first output** (3 attempts, jittered backoff, Retry-After honoured). Once text has streamed, a retry would rewrite what the user is reading, so the turn fails and keeps the partial reply. Trigger.dev never retries a turn, for the same reason.
 - **Safe errors.** Every failure becomes a fixed code and message (for example `MODEL_RATE_LIMITED`, `AGENT_TIMEOUT`); provider text, keys and stack traces never reach a client.
 - **Context window:** the newest finished messages up to the question, at most 100 messages or 48,000 characters. Failed and cancelled replies are left out, so a retry sees what the first attempt saw.
@@ -138,6 +140,18 @@ The browser follows a run live through Trigger.dev realtime. The database is the
 - **Logs:** pino, JSON in production and pretty in development. Every request gets a trace id (an incoming `x-trace-id` is honoured if it looks safe). The trace id travels in the task payload, so the API's and the worker's lines for one turn share it, along with `chatId`, `runId` and `messageId`.
 - **Chat lists are keyset-paginated.** A chat pinned or unpinned during a walk can appear on two pages, so clients de-duplicate by id.
 - **Imports:** `#src/*` (Node subpath imports). The custom `magica-source` condition points them at the TypeScript sources for tsx, tsc, Vitest and the Trigger.dev bundler, and at `dist/` for `pnpm start`.
+
+## Many turns at once
+
+The send path only writes a few rows and hands the turn to Trigger.dev, so accepting 1,000 turns at once is cheap. How many *run* at once is set by three limits:
+
+1. **`AGENT_CONCURRENCY_LIMIT`** (default 20): the agent task's queue. Turns above it wait, durably, and are shown to the client as a `PENDING` run. Nothing fails for waiting.
+2. **Your Trigger.dev plan's concurrency** for the environment; set it at or above the queue limit.
+3. **OpenRouter's free rate limits**, the real ceiling, which no setting removes. Raising the queue limit past what the free route allows only turns waiting into 429s (which the turn reports with a safe message), so the queue limit is deliberately a throttle.
+
+So at 1,000 concurrent turns every turn is accepted, holds its credits, and runs as capacity allows, in order; none is duplicated, lost or charged twice, and each ends exactly once.
+
+The database needs one setting for this: every Trigger.dev run is its own process with its own pool, so point the worker at a pooled URL (PgBouncer, or Neon's pooled connection string) and set `DATABASE_POOL_MAX=1` or `2` there. Partial-reply saves are about one small update per second per running turn.
 
 ## Contracts
 
