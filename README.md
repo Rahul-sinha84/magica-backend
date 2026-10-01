@@ -115,6 +115,7 @@ All routes except health need `Authorization: Bearer <Clerk session token>`. Err
 | `POST /api/chats/:chatId/messages` | Sends a message and starts a turn: `{ content, clientMessageId }`. |
 | `GET /api/chats/:chatId/active-run` | The run in flight, a fresh realtime token, and the partial reply saved so far. |
 | `POST /api/runs/:runId/cancel` | 204, or 404 when there is nothing left to stop. |
+| `POST /api/runs/:runId/retry` | Answers the same question again as a new turn (201, or 200 for a repeated request). Only the chat's latest turn, and only if it failed or was stopped (409 `RUN_NOT_RETRYABLE` otherwise); the failed reply stays visible. Messages carry `canRetry` on the one reply this applies to. Shares the send rate limit. |
 
 ### A turn, end to end
 
@@ -131,6 +132,7 @@ The browser follows a run live through Trigger.dev realtime. The database is the
 
 - **Express instead of Next.js route handlers.** The brief suggests Next route handlers; a separate API keeps the long-lived pieces (Trigger.dev client, database pool, rate limits) out of the frontend's serverless functions and lets both repos deploy on their own.
 - **One active run per chat, enforced by the database** (a partial unique index), not by a check-then-insert that two requests could both pass.
+- **Retry answers the same question again, only for the latest turn.** It creates a new run and reply for the existing question, with the same rules as a send (credit hold, one run per chat, undone if the agent can't start). The chat row is locked while checking "is this still the latest turn?", so a send and a retry can't both win. A unique `retryOfRunId` makes a double click return the same retry.
 - **Idempotent send.** The client picks `clientMessageId`. Sending it again returns the same turn with 200; the same id with different text is a 400; a retry after a failed run needs a new id.
 - **Credits are held at send and released at the end.** Each turn costs 0 credits for now, because the free router has no price; the hold only admits a turn. Credits held by a run that died are reclaimed when a send would otherwise be refused for lack of credit.
 - **Stale runs recover themselves, but waiting is not stale.** A run that was never dispatched is ended after 60 s. A run waiting in Trigger.dev's queue is left alone however busy it is; each run is dispatched with a 10-minute queue TTL, after which Trigger.dev drops it as `EXPIRED` and we end it with a safe message (and end it ourselves at 11 minutes if Trigger.dev can't be asked). Only a run no worker can ever take (Trigger.dev reports `PENDING_VERSION`: the task isn't deployed) is ended after 3 minutes, and its queue entry is cancelled. A run with no saved progress for 30 s is checked with Trigger.dev, at most every 15 s. A started run never lives past 11 minutes counted from when it started (the task's 10-minute limit plus slack), so time spent in the queue doesn't count. This happens on demand, when `active-run` is read or a send finds the chat busy (or the user short of credit), so there is no background job to run or monitor.

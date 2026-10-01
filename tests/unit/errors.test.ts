@@ -24,9 +24,15 @@ describe("ERROR_STATUS", () => {
     expect(Object.keys(ERROR_STATUS).sort()).toEqual([...ErrorCodeSchema.options].sort());
   });
 
-  it("maps each code to its own status (one-to-one, so either one identifies the other)", () => {
-    const statuses = Object.values(ERROR_STATUS);
-    expect(new Set(statuses).size).toBe(statuses.length);
+  it("gives every code its own status, except the two conflicts, which clients tell apart by code", () => {
+    const byStatus = new Map<number, string[]>();
+    for (const [code, status] of Object.entries(ERROR_STATUS)) byStatus.set(status, [...(byStatus.get(status) ?? []), code]);
+    const shared = [...byStatus.entries()].filter(([, codes]) => codes.length > 1);
+    expect(shared).toEqual([[409, ["RUN_ACTIVE", "RUN_NOT_RETRYABLE"]]]);
+  });
+
+  it("never uses 422, which the frontend reads as an answer it could not understand", () => {
+    expect(Object.values(ERROR_STATUS)).not.toContain(422);
   });
 
   it("uses only real client (4xx) and server (5xx) statuses", () => {

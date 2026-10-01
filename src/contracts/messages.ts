@@ -106,6 +106,9 @@ export const MessageSchema = z.object({
   clientMessageId: z.string().nullable().optional(),
   // why a reply failed, in words that are safe to show; null/absent on everything that did not fail
   errorMessage: z.string().nullable().optional(),
+  // true only on the reply that can be retried right now (POST /api/runs/{agentRunId}/retry): the chat's latest turn,
+  // when it failed or was stopped
+  canRetry: z.boolean().optional(),
 });
 
 // The text is stored exactly as typed (indentation and code blocks matter), so it is only checked for
@@ -155,3 +158,8 @@ export type AudioBlock = z.infer<typeof AudioBlockSchema>;
 export type UsageBlock = z.infer<typeof UsageBlockSchema>;
 export type SendMessageBody = z.infer<typeof SendMessageBodySchema>;
 export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
+
+// A retry answers the same question again as a new turn, so it is answered exactly like a send: the question (no new
+// message is created), the new run, and access to follow it. 201 for a new retry, 200 for a repeated request.
+export const RetryRunResponseSchema = SendMessageResponseSchema;
+export type RetryRunResponse = SendMessageResponse;

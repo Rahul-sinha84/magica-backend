@@ -10,7 +10,7 @@ import { createRealtimeToken, dispatchAgentTurn } from "#src/lib/trigger.js";
 import { hold } from "#src/services/credits.js";
 import { reconcileChat, reconcileUserRuns } from "#src/services/reconcile.js";
 import { requireChat } from "#src/services/chats.js";
-import { finalizeRun } from "#src/services/runs.js";
+import { ACTIVE_STATUSES, RETRYABLE_STATUSES, finalizeRun } from "#src/services/runs.js";
 import { serializeMessage } from "#src/services/serialize.js";
 
 const PROVISIONAL_TITLE_MAX = 50;
@@ -88,19 +88,21 @@ function createTurn(userId: string, chatId: string, body: SendMessageBody, trace
     const provisional = titleFrom(body.content, PROVISIONAL_TITLE_MAX);
     const named = provisional ? (await tx.chat.updateMany({ where: { id: chatId, title: DEFAULT_CHAT_TITLE }, data: { title: provisional } })).count === 1 : false;
     await tx.chat.update({ where: { id: chatId }, data: { lastMessageAt: replyAt } });
-    return { userMessage, assistantMessage, run, replyAt, provisionalTitle: named ? provisional : null };
+    return { userMessage, assistantMessage, run, replyAt, provisionalTitle: named ? provisional : null, newQuestion: true };
   });
 }
 
 type Created = Awaited<ReturnType<typeof createTurn>>;
 
 /** The agent could not be started, so the send did not happen: remove it, return the credits, put the chat back. */
-async function undoTurn({ userMessage, assistantMessage, run, replyAt, provisionalTitle }: Created, previousLastMessageAt: Date): Promise<void> {
+async function undoTurn({ userMessage, assistantMessage, run, replyAt, provisionalTitle, newQuestion }: Created, previousLastMessageAt: Date): Promise<void> {
   try {
     await prisma.$transaction(async (tx) => {
       const ended = await finalizeRun(run.id, { status: "FAILED", errorCode: "DISPATCH_FAILED" }, tx); // releases the hold
       if (!ended) return; // the agent did start after all; leave the turn alone
-      await tx.message.deleteMany({ where: { id: { in: [userMessage.id, assistantMessage.id] } } }); // cascades to the run
+      // a retry asked an existing question again: only its new reply goes, never the question
+      const created = newQuestion ? [userMessage.id, assistantMessage.id] : [assistantMessage.id];
+      await tx.message.deleteMany({ where: { id: { in: created } } }); // cascades to the run
       if (provisionalTitle) await tx.chat.updateMany({ where: { id: userMessage.chatId, title: provisionalTitle }, data: { title: DEFAULT_CHAT_TITLE } });
       await tx.chat.updateMany({ where: { id: userMessage.chatId, lastMessageAt: replyAt }, data: { lastMessageAt: previousLastMessageAt } });
     });
@@ -171,6 +173,111 @@ export async function sendMessage(
       triggerRunId = await dispatch(created, userId, chatId, traceId, dispatchTimeoutMs);
     } catch (err) {
       logger.error({ err, runId: created.run.id, chatId }, "could not start the agent run");
+      await undoTurn(created, chat.lastMessageAt);
+      throw new AppError("SERVICE_UNAVAILABLE", "We couldn't start the agent. Please try again.");
+    }
+    await saveTriggerRunId(created.run.id, triggerRunId);
+    return { replayed: false, message: serializeMessage(created.userMessage, created.run.id), runId: created.run.id, triggerRunId };
+  }
+  throw runActive();
+}
+
+const notRetryable = (message: string) => new AppError("RUN_NOT_RETRYABLE", message);
+const replyGone = () => new AppError("NOT_FOUND", "That reply isn't there any more.");
+
+/** A retry of this run that was already started (a double click, a repeated request): the same turn, never a second. */
+async function existingRetry(runId: string, replayWaitMs: number): Promise<SentTurn | null> {
+  const find = () =>
+    prisma.agentRun.findUnique({ where: { retryOfRunId: runId }, select: { id: true, triggerRunId: true, triggerMessage: true } });
+  let retry = await find();
+  if (!retry) return null;
+  // the first request may still be handing it to Trigger.dev; give it a moment rather than fail a double click
+  for (const deadline = Date.now() + replayWaitMs; !retry?.triggerRunId && Date.now() < deadline; ) {
+    await sleep(50);
+    retry = await find();
+  }
+  if (!retry) return null; // that retry was undone while we waited: start over
+  if (!retry.triggerRunId) throw new AppError("RUN_ACTIVE", "That retry is still starting. Try again in a moment.");
+  return { replayed: true, message: serializeMessage(retry.triggerMessage, retry.id), runId: retry.id, triggerRunId: retry.triggerRunId };
+}
+
+/** Another request retried this run between our lookup and our write: answer with that retry instead. */
+class RetryAlreadyStarted extends Error {}
+
+/**
+ * The new turn for a retry, written together or not at all. The chat row is locked first, so "is this still the chat's
+ * latest turn?" cannot change underneath us: a send and a retry, or two retries, take turns instead of racing.
+ */
+function createRetryTurn(userId: string, original: { id: string; chatId: string; triggerMessageId: string }, traceId: string) {
+  const { chatId } = original;
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Chat" WHERE id = ${chatId} FOR UPDATE`;
+    if (locked.length === 0) throw replyGone(); // the chat was deleted a moment ago
+    const latest = await tx.agentRun.findFirst({
+      where: { chatId },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true, status: true, retryOfRunId: true },
+    });
+    if (latest && latest.id !== original.id) {
+      if (latest.retryOfRunId === original.id) throw new RetryAlreadyStarted();
+      throw notRetryable("Only the latest message can be retried.");
+    }
+    const status = latest?.status;
+    if (status && (ACTIVE_STATUSES as readonly string[]).includes(status)) throw new AppError("RUN_ACTIVE", "This reply is still being written.");
+    if (!status || !RETRYABLE_STATUSES.includes(status)) throw notRetryable("Only a failed or stopped reply can be retried.");
+
+    const replyAt = new Date(); // after the failed reply, so the new answer reads below it
+    const userMessage = await tx.message.findUniqueOrThrow({ where: { id: original.triggerMessageId } });
+    const assistantMessage = await tx.message.create({
+      data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
+    });
+    const run = await tx.agentRun.create({
+      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, retryOfRunId: original.id },
+    });
+    await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold (retry)", idempotencyKey: holdKey(run.id), agentRunId: run.id });
+    await tx.chat.update({ where: { id: chatId }, data: { lastMessageAt: replyAt } });
+    return { userMessage, assistantMessage, run, replyAt, provisionalTitle: null, newQuestion: false };
+  });
+}
+
+/**
+ * Tries a failed or stopped turn again: the same question, a new reply, under the same rules as a send (one run per
+ * chat, the credit hold, undone if the agent can't be started). Only the chat's latest turn can be retried, so the
+ * conversation always reads in order; the failed reply stays visible above the new one. Retrying the same run twice
+ * gives back the same retry.
+ */
+export async function retryRun(
+  { userId, runId, traceId }: { userId: string; runId: string; traceId: string },
+  { dispatchTimeoutMs = DISPATCH_TIMEOUT_MS, replayWaitMs = REPLAY_WAIT_MS }: SendOptions = {},
+): Promise<SentTurn> {
+  const original = await prisma.agentRun.findFirst({ where: { id: runId, userId }, select: { id: true, chatId: true, triggerMessageId: true } });
+  if (!original) throw replyGone(); // another user's run is "not found" too, so nothing leaks
+  const chat = await requireChat(userId, original.chatId);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const earlier = await existingRetry(runId, replayWaitMs);
+    if (earlier) return earlier;
+
+    let created: Created;
+    try {
+      created = await createRetryTurn(userId, original, traceId);
+    } catch (error) {
+      if (error instanceof RetryAlreadyStarted || violates(error, "AgentRun_retryOfRunId_key")) continue; // answer with that one
+      if (error instanceof AppError && error.code === "INSUFFICIENT_CREDITS" && (await reconcileUserRuns(userId, { force: true }))) continue;
+      if (violates(error, "AgentRun_one_active_per_chat")) {
+        // a twin of this retry won (it may still be starting): the next pass waits for it and answers with it
+        if (await prisma.agentRun.findUnique({ where: { retryOfRunId: runId }, select: { id: true } })) continue;
+        if (attempt === 0 && (await reconcileChat(original.chatId, { force: true }))) continue;
+        throw runActive();
+      }
+      throw error;
+    }
+
+    let triggerRunId: string;
+    try {
+      triggerRunId = await dispatch(created, userId, original.chatId, traceId, dispatchTimeoutMs);
+    } catch (err) {
+      logger.error({ err, runId: created.run.id, chatId: original.chatId, retryOf: runId }, "could not start the retry");
       await undoTurn(created, chat.lastMessageAt);
       throw new AppError("SERVICE_UNAVAILABLE", "We couldn't start the agent. Please try again.");
     }

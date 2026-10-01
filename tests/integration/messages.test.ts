@@ -360,7 +360,7 @@ describe("the message list query itself (the SQL Prisma really sends)", () => {
     expect(plan).not.toContain("Seq Scan");
   });
 
-  it("finds each page's runs with two indexed lookups, not one query per message", async () => {
+  it("finds each page's runs with a fixed number of indexed lookups, not one query per message", async () => {
     const { chat } = await setup();
     await seed(chat.id, 40);
     const queries: string[] = [];
@@ -371,7 +371,10 @@ describe("the message list query itself (the SQL Prisma really sends)", () => {
     } finally {
       await db.$disconnect();
     }
-    expect(queries.filter((q) => /FROM "public"\."AgentRun"/.test(q))).toHaveLength(1);
+    const runQueries = queries.filter((q) => /FROM "public"\."AgentRun"/.test(q));
+    // the page's runs, plus the chat's latest run (which decides the one reply that can be retried)
+    expect(runQueries).toHaveLength(2);
+    expect(runQueries.filter((q) => /LIMIT/.test(q) && /"chatId" = \$1/.test(q))).toHaveLength(1);
     expect(queries.filter((q) => /FROM "public"\."Message"/.test(q))).toHaveLength(1);
   });
 });

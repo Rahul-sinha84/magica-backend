@@ -3,6 +3,7 @@ import type { Message, MessageListQuerySchema, MessageListResponseSchema } from 
 import { prisma, type Prisma } from "#src/db/client.js";
 import { CursorTimestampSchema, IdSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
 import { requireChat } from "#src/services/chats.js";
+import { RETRYABLE_STATUSES } from "#src/services/runs.js";
 import { serializeMessage } from "#src/services/serialize.js";
 
 type MessageListQuery = z.infer<typeof MessageListQuerySchema>;
@@ -39,6 +40,10 @@ export async function listMessages(
     select: { id: true, assistantMessageId: true, triggerMessageId: true, createdAt: true, errorMessage: true },
     orderBy: { createdAt: "asc" }, // later runs overwrite earlier ones below
   });
+  // only the chat's latest turn can be retried, and only once it failed or was stopped (see retryRun)
+  const latest = await db.agentRun.findFirst({ where: { chatId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true, status: true } });
+  const retryable = latest && RETRYABLE_STATUSES.includes(latest.status) ? latest.id : null;
+
   const runOf = new Map<string, string>();
   const failureOf = new Map<string, string>();
   for (const run of runs) {
@@ -50,6 +55,10 @@ export async function listMessages(
   // the reason is only ever shown on a reply that actually failed
   const messages: Message[] = page
     .reverse()
-    .map((row) => serializeMessage(row, runOf.get(row.id) ?? null, row.status === "FAILED" ? (failureOf.get(row.id) ?? null) : null));
+    .map((row) => {
+      const runId = runOf.get(row.id) ?? null;
+      const canRetry = row.role === "ASSISTANT" && runId !== null && runId === retryable;
+      return serializeMessage(row, runId, row.status === "FAILED" ? (failureOf.get(row.id) ?? null) : null, canRetry);
+    });
   return { messages, cursor: rows.length > limit && oldest ? encodeCursor([oldest.createdAt.toISOString(), oldest.id]) : null };
 }

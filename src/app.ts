@@ -39,9 +39,11 @@ export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logge
     requireUser,
     express.json({ limit: "1mb" }),
   );
-  app.use("/api/chats/:chatId/messages", messagesRouter(createMessageSendRateLimit(sendLimit === undefined ? {} : { limit: sendLimit })));
+  // one limiter for everything that starts a turn (sending and retrying), so the two share the same allowance
+  const startsTurn = createMessageSendRateLimit(sendLimit === undefined ? {} : { limit: sendLimit });
+  app.use("/api/chats/:chatId/messages", messagesRouter(startsTurn));
   app.use("/api/chats", chatsRouter);
-  app.use("/api", runsRouter);
+  app.use("/api", runsRouter(startsTurn));
   app.use("/api/credits", creditsRouter);
   app.use("/api/models", modelsRouter);
 

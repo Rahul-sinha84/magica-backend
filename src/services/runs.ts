@@ -10,6 +10,8 @@ import { release } from "#src/services/credits.js";
 type Tx = Prisma.TransactionClient;
 
 export const ACTIVE_STATUSES = ["PENDING", "RUNNING"] as const;
+/** A run that ended without an answer, which the user may try again (only the chat's latest turn; see retryRun). */
+export const RETRYABLE_STATUSES: readonly string[] = ["FAILED", "CANCELLED"];
 
 export interface RunOutcome {
   status: "COMPLETED" | "FAILED" | "CANCELLED";

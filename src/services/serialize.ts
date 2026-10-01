@@ -15,7 +15,7 @@ export const serializeChat = (row: ChatRow): Chat => ({
  * `agentRunId` is the run this turn belongs to: the one a user message started, or the one that produced a reply.
  * `errorMessage` is why that run failed (only ever given for a failed reply).
  */
-export const serializeMessage = (row: MessageRow, agentRunId: string | null, errorMessage: string | null = null): Message => ({
+export const serializeMessage = (row: MessageRow, agentRunId: string | null, errorMessage: string | null = null, canRetry = false): Message => ({
   id: row.id,
   chatId: row.chatId,
   role: row.role,
@@ -27,4 +27,5 @@ export const serializeMessage = (row: MessageRow, agentRunId: string | null, err
   agentRunId,
   clientMessageId: row.clientMessageId,
   errorMessage,
+  canRetry,
 });

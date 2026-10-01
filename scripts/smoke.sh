@@ -107,6 +107,20 @@ expect "cancelling again finds nothing to stop" 404
 call GET "/api/chats/$chat/active-run"
 expect "no active run after cancel" 200 '.run == null'
 
+call POST "/api/runs/$run/retry"
+if [[ $status == 201 ]]; then
+  pass "retry the stopped reply"
+  retry_run=$(echo "$body" | jq -r '.runId')
+  call POST "/api/runs/$run/retry"
+  expect "retrying it again gives back the same retry" 200 ".runId == \"$retry_run\""
+  call POST "/api/runs/$retry_run/cancel"
+  if [[ $status == 204 || $status == 404 ]]; then pass "stop the retry"; else fail "stop the retry (HTTP $status)"; fi
+elif [[ $status == 409 ]] && [[ $(echo "$body" | jq -r .code) == RUN_NOT_RETRYABLE ]]; then
+  pass "retry: the reply had completed, so there is nothing to retry"
+else
+  fail "retry (HTTP $status): $(echo "$body" | head -c 300)"
+fi
+
 call GET "/api/chats/$chat/messages"
 expect "history has the question and an ended reply" 200 \
   '([.messages[] | select(.role == "USER")] | length >= 1) and ([.messages[] | select(.role == "ASSISTANT") | .status] | all(IN("COMPLETED","CANCELLED","FAILED")))'

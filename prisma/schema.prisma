@@ -81,6 +81,8 @@ model AgentRun {
   inputTokens        Int?
   outputTokens       Int?
   traceId            String
+  // the failed or cancelled run this one retries; unique, so retrying the same run twice gives back the same retry
+  retryOfRunId       String?   @unique
   startedAt          DateTime?
   completedAt        DateTime?
   createdAt          DateTime  @default(now())
@@ -90,6 +92,8 @@ model AgentRun {
   user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   triggerMessage   Message          @relation("TriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
   assistantMessage Message          @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  retryOf          AgentRun?        @relation("Retries", fields: [retryOfRunId], references: [id], onDelete: SetNull)
+  retriedBy        AgentRun?        @relation("Retries")
   toolInvocations  ToolInvocation[]
   creditLedger     CreditLedger[]
 
