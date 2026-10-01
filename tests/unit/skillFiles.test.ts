@@ -26,7 +26,8 @@ describe("shipped skills", () => {
 
   it.each(skills)("%s names only tools the agent has", (skill) => {
     const body = readFileSync(join(root, skill, "SKILL.md"), "utf8");
-    const mentioned = [...body.matchAll(/\b([a-z]+(?:_[a-z0-9]+)+)\b/g)].map((m) => m[1]).filter((name) => name?.endsWith("_image") || name?.includes("image_") || name?.includes("_videos"));
+    // a word that looks like a media tool's name (gpt_*, crop_*, merge_*) must be one of the real tools
+    const mentioned = [...body.matchAll(/\b((?:gpt|crop|merge)_[a-z0-9_]+)\b/g)].map((m) => m[1]);
     for (const tool of mentioned) expect(["gpt_image_2", "crop_image", "merge_videos"]).toContain(tool);
   });
 });

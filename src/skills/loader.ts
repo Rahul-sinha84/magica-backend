@@ -1,15 +1,16 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { prisma, Prisma } from "#src/db/client.js";
+import { ToolError } from "#src/tools/errors.js";
 import type { SkillRegistry } from "#src/skills/registry.js";
 import { skills as defaultSkills } from "#src/skills/skills.js";
 
 // What the agent's skill tools do. Errors carry a message that is safe to hand back to the model (and to show in the
 // tool card): never a file system path or an internal detail.
 
-export class SkillToolError extends Error {
+export class SkillToolError extends ToolError {
   constructor(message: string) {
-    super(message);
+    super("TOOL_FAILED", message);
     this.name = "SkillToolError";
   }
 }
