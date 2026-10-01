@@ -1,0 +1,25 @@
+{
+  "id": "cmupajkoo000ol204lg0jqb77",
+  "nodeType": "crop_image",
+  "subModelId": null,
+  "status": "COMPLETED",
+  "input": {
+    "image_url": "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png",
+    "x_percent": 0,
+    "y_percent": 0,
+    "width_percent": 100,
+    "height_percent": 50
+  },
+  "output": {
+    "width": 1024,
+    "height": 512,
+    "image_url": "https://g.tlcdn.com/gen/7a3cc3bbb328407abd6b35a494a4e632.png",
+    "creditUsed": 5000
+  },
+  "error": null,
+  "userMessage": null,
+  "creditUsed": 5000,
+  "triggerRunId": "run_06gfd9cushnsoaevo32u2j3001",
+  "source": "api",
+  "createdAt": "2026-10-01T08:47:24.024Z"
+}

@@ -8,7 +8,7 @@ const server = {
   CLERK_PUBLISHABLE_KEY: "pk_test_abc",
   TRIGGER_SECRET_KEY: "tr_dev_abc",
 };
-const worker = { ...db, OPENROUTER_API_KEY: "sk-or-abc" };
+const worker = { ...db, OPENROUTER_API_KEY: "sk-or-abc", MAGICA_API_KEY: "mg-secret-abc123", MAGICA_BASE_URL: "https://inference.magica.example" };
 
 const parseServer = (overrides: Record<string, string | undefined> = {}) =>
   parseEnv(ServerEnvSchema, { ...server, ...overrides });
@@ -134,6 +134,41 @@ describe("worker env", () => {
     ["DATABASE_POOL_MAX", "101"],
   ])("rejects %s=%s", (key, value) => {
     expect(() => parseEnv(WorkerEnvSchema, { ...worker, [key]: value })).toThrow(new RegExp(key));
+  });
+
+  it("requires the Magica key and base URL, with no default host", () => {
+    const { MAGICA_API_KEY: _key, ...noKey } = worker;
+    const { MAGICA_BASE_URL: _url, ...noUrl } = worker;
+    expect(() => parseEnv(WorkerEnvSchema, noKey)).toThrow(/MAGICA_API_KEY/);
+    expect(() => parseEnv(WorkerEnvSchema, noUrl)).toThrow(/MAGICA_BASE_URL/);
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: "   " })).toThrow(/MAGICA_BASE_URL/);
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_API_KEY: "" })).toThrow(/MAGICA_API_KEY/);
+  });
+
+  it.each(["not a url", "ftp://inference.magica.example", "inference.magica.example"])("rejects the base URL %j", (url) => {
+    expect(() => parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: url })).toThrow(/MAGICA_BASE_URL/);
+  });
+
+  it("trims the key and drops trailing slashes from the base URL, keeping any path", () => {
+    expect(parseEnv(WorkerEnvSchema, { ...worker, MAGICA_API_KEY: "  mg-secret-abc123  ", MAGICA_BASE_URL: "https://inference.magica.example/" })).toMatchObject({
+      MAGICA_API_KEY: "mg-secret-abc123",
+      MAGICA_BASE_URL: "https://inference.magica.example",
+    });
+    expect(parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: "http://localhost:4000/proxy//" }).MAGICA_BASE_URL).toBe("http://localhost:4000/proxy");
+  });
+
+  it("never puts the Magica key in an error message", () => {
+    try {
+      parseEnv(WorkerEnvSchema, { ...worker, MAGICA_BASE_URL: "nope" });
+      expect.unreachable();
+    } catch (error) {
+      expect(String(error)).not.toContain("mg-secret-abc123");
+    }
+  });
+
+  it("is not needed by the API server", () => {
+    expect(() => parseServer()).not.toThrow();
+    expect(parseServer()).not.toHaveProperty("MAGICA_API_KEY");
   });
 
   it("rejects paid models too", () => {

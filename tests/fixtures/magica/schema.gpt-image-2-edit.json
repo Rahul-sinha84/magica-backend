@@ -1,0 +1,110 @@
+{
+  "modelId": "gpt-image-2-edit",
+  "name": "GPT Image 2 Edit",
+  "category": "image-to-image",
+  "description": "OpenAI's newest image model for editing with any-resolution support and improved quality",
+  "features": [
+    "Text Rendering",
+    "High Quality",
+    "Image Editing",
+    "Output Formats"
+  ],
+  "capabilities": {
+    "promptLimit": 4000,
+    "promptLimitType": "characters"
+  },
+  "fields": [
+    {
+      "name": "prompt",
+      "type": "textarea",
+      "dataType": "string",
+      "required": true,
+      "description": "Text prompt describing how to edit the image, max 4000 characters, required",
+      "placeholder": "Describe how you want to edit the image...",
+      "max": 4000
+    },
+    {
+      "name": "uploadedImages",
+      "type": "image",
+      "dataType": "string[]",
+      "required": true,
+      "default": [],
+      "description": "Source images to edit, accepts up to 10 image uploads, required \u2014 Upload images to edit (max 10 images) \u2014 Use public HTTPS URLs only. If the harness gives a local path like /mnt/user-data/uploads/... or file://..., call upload_file first and use the returned permanent URL.",
+      "maxImages": 10
+    },
+    {
+      "name": "size",
+      "type": "composite-select",
+      "dataType": "string",
+      "options": [
+        "Auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536",
+        "2048x2048",
+        "2048x1152",
+        "3840x2160",
+        "2160x3840"
+      ],
+      "default": "Auto",
+      "description": "Output image dimensions with default Auto. Pick a preset or choose Custom to enter width x height. Custom size: width and height must each be 1024-3840 px, multiples of 16; long-to-short ratio <= 3:1; total pixels 655,360-8,294,400. Prefer a preset unless exact dimensions are required. For 1080p aspect output, use 1920x1088 or 1088x1920; do not use 1920x1080 because 1080 is not a multiple of 16. \u2014 For a custom value, do NOT pass \"Custom\" \u2014 instead set \"size\" directly to an object with numeric \"width\" and \"height\", e.g. {\"width\":1024,\"height\":1024}. Constraints: Custom size: width and height must each be 1024-3840 px, multiples of 16; long-to-short ratio <= 3:1; total pixels 655,360-8,294,400."
+    },
+    {
+      "name": "quality",
+      "type": "select",
+      "dataType": "string",
+      "options": [
+        "High",
+        "Medium",
+        "Low"
+      ],
+      "default": "High",
+      "description": "Rendering quality level affecting detail and cost with default High, options are High, Medium, Low"
+    },
+    {
+      "name": "background",
+      "type": "select",
+      "dataType": "string",
+      "options": [
+        "Auto",
+        "Opaque",
+        "Transparent"
+      ],
+      "default": "Auto",
+      "description": "Background transparency mode for the output image with default Auto, options are Auto, Opaque, Transparent. Transparent backgrounds require PNG or WebP output."
+    },
+    {
+      "name": "n",
+      "type": "select",
+      "dataType": "number",
+      "options": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "default": 1,
+      "description": "Number of images to generate with default 1, options are 1, 2, 3, 4"
+    },
+    {
+      "name": "output_format",
+      "type": "select",
+      "dataType": "string",
+      "options": [
+        "PNG",
+        "JPEG",
+        "WebP"
+      ],
+      "default": "PNG",
+      "description": "Output file format of the generated image with default PNG, options are PNG, JPEG, WebP."
+    }
+  ],
+  "defaults": {
+    "uploadedImages": [],
+    "size": "Auto",
+    "quality": "High",
+    "background": "Auto",
+    "n": 1,
+    "output_format": "PNG"
+  }
+}

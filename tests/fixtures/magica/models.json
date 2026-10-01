@@ -1,0 +1,38 @@
+[
+  {
+    "nodeType": "crop_image",
+    "name": "Crop Image",
+    "description": "Crop an image to specified dimensions",
+    "category": "utility",
+    "icon": "Crop",
+    "accent": "orange"
+  },
+  {
+    "nodeType": "merge_videos",
+    "name": "Merge Videos",
+    "description": "Concatenate multiple videos into one",
+    "category": "utility",
+    "icon": "Layers",
+    "accent": "indigo"
+  },
+  {
+    "nodeType": "gpt_image_2",
+    "name": "GPT Image 2",
+    "description": "OpenAI's newest image model with any-resolution support and improved quality",
+    "category": "text-to-image",
+    "icon": "https://image.galaxy.ai/image-logos/gpt-image-1.webp",
+    "accent": "green",
+    "subModels": [
+      {
+        "subModelId": "gpt-image-2-text",
+        "label": "Text to Image",
+        "category": "text-to-image"
+      },
+      {
+        "subModelId": "gpt-image-2-edit",
+        "label": "Image to Image",
+        "category": "image-to-image"
+      }
+    ]
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "id": "cmupak6bi000rjk040txvozgs",
+  "nodeType": "merge_videos",
+  "subModelId": null,
+  "status": "RUNNING",
+  "input": {
+    "transition": "none",
+    "video_urls": [
+      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
+      "https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4"
+    ]
+  },
+  "output": null,
+  "error": null,
+  "userMessage": null,
+  "creditUsed": 0,
+  "triggerRunId": "run_06gfd9gcolvn72kjokvlsbc201",
+  "source": "api",
+  "createdAt": "2026-10-01T08:47:52.063Z"
+}

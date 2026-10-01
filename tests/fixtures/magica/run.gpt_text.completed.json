@@ -1,0 +1,37 @@
+{
+  "id": "cmupafu240009jk04fjw1yvql",
+  "nodeType": "gpt_image_2",
+  "subModelId": "gpt-image-2-text",
+  "status": "COMPLETED",
+  "input": {
+    "n": 1,
+    "size": "1024x1024",
+    "prompt": "A small red fox sitting in fresh snow, simple flat illustration",
+    "quality": "Low",
+    "background": "Auto",
+    "output_format": "PNG"
+  },
+  "output": {
+    "result": [
+      "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png"
+    ],
+    "provider": "fal",
+    "creditUsed": 7644,
+    "resultMetadata": [
+      {
+        "size": 1160594,
+        "width": 1024,
+        "height": 1024,
+        "modelId": "gpt-image-2",
+        "mimeType": "image/png",
+        "mediaType": "image"
+      }
+    ]
+  },
+  "error": null,
+  "userMessage": null,
+  "creditUsed": 7644,
+  "triggerRunId": "run_06gfd8nlvvoqj0qv2ve9ch2s01",
+  "source": "api",
+  "createdAt": "2026-10-01T08:44:29.548Z"
+}

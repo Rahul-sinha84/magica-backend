@@ -45,6 +45,10 @@ export const WorkerEnvSchema = BaseEnvSchema.extend({
   // How many turns run at once; the rest wait in Trigger.dev's queue (and never fail for waiting). The free model's
   // rate limit is the real ceiling, so raising this mostly turns waiting into 429s. Read when the task is indexed.
   AGENT_CONCURRENCY_LIMIT: z.coerce.number().int().min(1).max(1000).default(20),
+  // Magica's model API (Crop Image, GPT Image 2, Merge Videos). Only the worker calls it, so only the worker has the
+  // key. The base URL is configuration with no default, so no environment's host is ever baked into the code.
+  MAGICA_API_KEY: key,
+  MAGICA_BASE_URL: z.url({ protocol: /^https?$/ }).transform((u) => u.replace(/\/+$/, "")),
 });
 
 // Values are trimmed; blank ones (e.g. `KEY=` copied from .env.example) count as missing, not as empty strings.

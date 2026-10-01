@@ -1,0 +1,6 @@
+{
+  "error": "Unknown node type: not_a_model",
+  "message": "Unknown node type: not_a_model",
+  "code": "NOT_FOUND",
+  "traceId": "req_fixture"
+}

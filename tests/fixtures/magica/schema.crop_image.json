@@ -1,0 +1,83 @@
+{
+  "modelId": "crop_image",
+  "name": "Crop Image",
+  "category": "utility",
+  "description": "Crop an image to specified dimensions",
+  "features": [],
+  "capabilities": {},
+  "fields": [
+    {
+      "name": "image_url",
+      "type": "image",
+      "dataType": "string",
+      "required": true,
+      "description": "Upload an image to crop \u2014 Use public HTTPS URLs only. If the harness gives a local path like /mnt/user-data/uploads/... or file://..., call upload_file first and use the returned permanent URL.",
+      "maxImages": 1
+    },
+    {
+      "name": "x_percent",
+      "type": "slider",
+      "dataType": "number",
+      "default": 0,
+      "description": "Horizontal crop start position (percentage from left)",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "name": "y_percent",
+      "type": "slider",
+      "dataType": "number",
+      "default": 0,
+      "description": "Vertical crop start position (percentage from top)",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "name": "width_percent",
+      "type": "slider",
+      "dataType": "number",
+      "default": 100,
+      "description": "Crop width as a percentage of the original image",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "name": "height_percent",
+      "type": "slider",
+      "dataType": "number",
+      "default": 100,
+      "description": "Crop height as a percentage of the original image",
+      "min": 0,
+      "max": 100
+    },
+    {
+      "name": "width_px",
+      "type": "number",
+      "dataType": "number",
+      "description": "Exact crop width in pixels. When width and height are set without X/Y, the crop is centered.",
+      "min": 1
+    },
+    {
+      "name": "height_px",
+      "type": "number",
+      "dataType": "number",
+      "description": "Exact crop height in pixels. When width and height are set without X/Y, the crop is centered.",
+      "min": 1
+    },
+    {
+      "name": "x_px",
+      "type": "number",
+      "dataType": "number",
+      "description": "Optional exact crop start position from the left. Leave empty to center pixel crops.",
+      "min": 0
+    },
+    {
+      "name": "y_px",
+      "type": "number",
+      "dataType": "number",
+      "description": "Optional exact crop start position from the top. Leave empty to center pixel crops.",
+      "min": 0
+    }
+  ],
+  "defaults": {}
+}

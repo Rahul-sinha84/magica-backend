@@ -1,0 +1,17 @@
+{
+  "modelId": "merge_videos",
+  "costConfig": null,
+  "costSummary": "40000 + 10000 per additional video, per billable minute",
+  "pricingApproach": "The input schema has no billable duration parameter: measure or assume source durations for planning, but do not invent execution fields. Partial minutes are prorated. Merge rate depends on video count; summed source duration is a conservative reservation because transitions can shorten output. Extraction settles on audio output duration. The one-minute example applies only to empty design-time forms, never final execution. Missing duration measurement fails rather than charging the example.",
+  "pricingDetails": {
+    "type": "per_minute",
+    "baseCreditsPerMinute": 40000,
+    "additionalVideoCreditsPerMinute": 10000,
+    "additionalVideoCount": "max(0, video_urls.length - 1)",
+    "designTimeExampleMinutes": 1,
+    "billingBasis": "measured output duration in seconds / 60",
+    "rounding": "floor whole credits after prorating duration",
+    "basis": "source metadata for reservation; measured generated media duration for final settlement"
+  },
+  "note": "The input schema has no billable duration parameter: measure or assume source durations for planning, but do not invent execution fields. Partial minutes are prorated. Merge rate depends on video count; summed source duration is a conservative reservation because transitions can shorten output. Extraction settles on audio output duration. The one-minute example applies only to empty design-time forms, never final execution. Missing duration measurement fails rather than charging the example."
+}

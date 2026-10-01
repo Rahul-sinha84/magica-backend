@@ -1,0 +1,32 @@
+{
+  "modelId": "merge_videos",
+  "name": "Merge Videos",
+  "category": "utility",
+  "description": "Concatenate multiple videos into one",
+  "features": [],
+  "capabilities": {},
+  "fields": [
+    {
+      "name": "video_urls",
+      "type": "video",
+      "dataType": "string[]",
+      "required": true,
+      "default": [],
+      "description": "Upload 2\u2013100 videos to concatenate (in order). \u2014 Use public HTTPS URLs only. If the harness gives a local path like /mnt/user-data/uploads/... or file://..., call upload_file first and use the returned permanent URL.",
+      "maxItems": 100
+    },
+    {
+      "name": "transition",
+      "type": "select",
+      "dataType": "string",
+      "options": [
+        "none",
+        "fade",
+        "dissolve"
+      ],
+      "default": "none",
+      "description": "Transition effect between videos"
+    }
+  ],
+  "defaults": {}
+}

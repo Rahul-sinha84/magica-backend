@@ -1,0 +1,30 @@
+{
+  "id": "cmupak6bi000rjk040txvozgs",
+  "nodeType": "merge_videos",
+  "subModelId": null,
+  "status": "COMPLETED",
+  "input": {
+    "transition": "none",
+    "video_urls": [
+      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
+      "https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4"
+    ]
+  },
+  "output": {
+    "fps": 29.97,
+    "width": 640,
+    "format": "mp4",
+    "height": 360,
+    "duration": 20.022,
+    "fileSize": 1752110,
+    "mimeType": "video/mp4",
+    "video_url": "https://g.tlcdn.com/gen/26f3da9667c14410a36cd91e123ecc81.mp4",
+    "creditUsed": 16685
+  },
+  "error": null,
+  "userMessage": null,
+  "creditUsed": 16685,
+  "triggerRunId": "run_06gfd9gcolvn72kjokvlsbc201",
+  "source": "api",
+  "createdAt": "2026-10-01T08:47:52.063Z"
+}

@@ -1,0 +1,6 @@
+{
+  "error": "Rate limit exceeded. Please try again later.",
+  "message": "Rate limit exceeded. Please try again later.",
+  "code": "RATE_LIMITED",
+  "traceId": "req_fixture"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "cmupafu240009jk04fjw1yvql",
+  "nodeType": "gpt_image_2",
+  "subModelId": "gpt-image-2-text",
+  "status": "RUNNING",
+  "input": {
+    "n": 1,
+    "size": "1024x1024",
+    "prompt": "A small red fox sitting in fresh snow, simple flat illustration",
+    "quality": "Low",
+    "background": "Auto",
+    "output_format": "PNG"
+  },
+  "output": null,
+  "error": null,
+  "userMessage": null,
+  "creditUsed": 0,
+  "triggerRunId": "run_06gfd8nlvvoqj0qv2ve9ch2s01",
+  "source": "api",
+  "createdAt": "2026-10-01T08:44:29.548Z"
+}

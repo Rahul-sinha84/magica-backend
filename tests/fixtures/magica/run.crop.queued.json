@@ -1,0 +1,20 @@
+{
+  "id": "cmupajkoo000ol204lg0jqb77",
+  "nodeType": "crop_image",
+  "subModelId": null,
+  "status": "QUEUED",
+  "input": {
+    "image_url": "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png",
+    "x_percent": 0,
+    "y_percent": 0,
+    "width_percent": 100,
+    "height_percent": 50
+  },
+  "output": null,
+  "error": null,
+  "userMessage": null,
+  "creditUsed": 0,
+  "triggerRunId": "run_06gfd9cushnsoaevo32u2j3001",
+  "source": "api",
+  "createdAt": "2026-10-01T08:47:24.024Z"
+}

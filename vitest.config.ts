@@ -21,6 +21,9 @@ export default defineConfig({
       TRIGGER_SECRET_KEY: "tr_dev_placeholder",
       FRONTEND_ORIGIN: "http://localhost:3001",
       OPENROUTER_API_KEY: "sk-or-placeholder",
+      // never the real service: tests that need Magica start a fake server and pass its URL explicitly
+      MAGICA_API_KEY: "magica-test-placeholder",
+      MAGICA_BASE_URL: "http://127.0.0.1:9",
     },
     projects: [
       { extends: true, test: { name: "unit", include: ["tests/unit/**/*.test.ts"] } },

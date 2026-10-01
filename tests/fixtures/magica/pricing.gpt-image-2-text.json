@@ -1,0 +1,107 @@
+{
+  "modelId": "gpt-image-2-text",
+  "costConfig": {
+    "type": "tiered",
+    "tierKeyFrom": [
+      "quality",
+      "size"
+    ],
+    "tierKeyMap": {
+      "quality": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High"
+      },
+      "size": {
+        "Auto": "1024x1024",
+        "auto": "1024x1024",
+        "1024x1024": "1024x1024",
+        "1536x1024": "1536x1024",
+        "1024x1536": "1024x1536",
+        "2048x2048": "2048x2048",
+        "2048x1152": "2048x1152",
+        "3840x2160": "3840x2160",
+        "2160x3840": "2160x3840"
+      }
+    },
+    "tiers": {
+      "High:1024x1024": 0.21072,
+      "High:1536x1024": 0.16464,
+      "High:1024x1536": 0.16464,
+      "High:2048x2048": 0.42816,
+      "High:2048x1152": 0.16949999999999998,
+      "High:3840x2160": 0.40026,
+      "High:2160x3840": 0.40026,
+      "Medium:1024x1024": 0.05268,
+      "Medium:1536x1024": 0.04116,
+      "Medium:1024x1536": 0.04116,
+      "Medium:2048x2048": 0.10704,
+      "Medium:2048x1152": 0.04239,
+      "Medium:3840x2160": 0.10008,
+      "Medium:2160x3840": 0.10008,
+      "Low:1024x1024": 0.00588,
+      "Low:1536x1024": 0.004739999999999999,
+      "Low:1024x1536": 0.004739999999999999,
+      "Low:2048x2048": 0.01191,
+      "Low:2048x1152": 0.00471,
+      "Low:3840x2160": 0.011130000000000001,
+      "Low:2160x3840": 0.011130000000000001
+    },
+    "defaultTier": "High:1024x1024"
+  },
+  "costSummary": "0.0048-0.4282 USD (tiered)",
+  "pricingApproach": "Tiered pricing based on quality + size. Pass sampleInput to get an estimatedCost.",
+  "pricingDetails": {
+    "type": "tiered",
+    "pricingInputs": [
+      "quality",
+      "size"
+    ],
+    "acceptedValues": {
+      "quality": {
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High"
+      },
+      "size": {
+        "Auto": "1024x1024",
+        "auto": "1024x1024",
+        "1024x1024": "1024x1024",
+        "1536x1024": "1536x1024",
+        "1024x1536": "1024x1536",
+        "2048x2048": "2048x2048",
+        "2048x1152": "2048x1152",
+        "3840x2160": "3840x2160",
+        "2160x3840": "2160x3840"
+      }
+    },
+    "defaultPricingInputValues": {
+      "quality": "High",
+      "size": "Auto"
+    },
+    "tiers": {
+      "High:1024x1024": "0.2108M",
+      "High:1536x1024": "0.1647M",
+      "High:1024x1536": "0.1647M",
+      "High:2048x2048": "0.4282M",
+      "High:2048x1152": "0.1695M",
+      "High:3840x2160": "0.4003M",
+      "High:2160x3840": "0.4003M",
+      "Medium:1024x1024": "0.0527M",
+      "Medium:1536x1024": "0.0412M",
+      "Medium:1024x1536": "0.0412M",
+      "Medium:2048x2048": "0.1071M",
+      "Medium:2048x1152": "0.0424M",
+      "Medium:3840x2160": "0.1001M",
+      "Medium:2160x3840": "0.1001M",
+      "Low:1024x1024": "0.0059M",
+      "Low:1536x1024": "0.0048M",
+      "Low:1024x1536": "0.0048M",
+      "Low:2048x2048": "0.012M",
+      "Low:2048x1152": "0.0048M",
+      "Low:3840x2160": "0.0112M",
+      "Low:2160x3840": "0.0112M"
+    }
+  },
+  "note": "Pass sampleInput to get an estimatedCost value. Credits are checked and charged automatically when you call execute_tool."
+}

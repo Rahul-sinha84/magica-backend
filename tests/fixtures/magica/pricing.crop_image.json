@@ -1,0 +1,12 @@
+{
+  "modelId": "crop_image",
+  "costConfig": null,
+  "costSummary": "5000 credits per crop",
+  "pricingApproach": "Canonical fixed charge per successful crop; no separate megapixel multiplier.",
+  "pricingDetails": {
+    "type": "fixed",
+    "credits": 5000,
+    "unit": "crop operation"
+  },
+  "note": "Canonical fixed charge per successful crop; no separate megapixel multiplier."
+}
