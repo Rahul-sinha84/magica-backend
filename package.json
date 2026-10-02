@@ -7,13 +7,6 @@
   "engines": {
     "node": ">=22.12"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.28.2",
-      "onFail": "download"
-    }
-  },
   "imports": {
     "#src/*": {
       "magica-source": "./src/*",
