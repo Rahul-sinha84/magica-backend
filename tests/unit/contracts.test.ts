@@ -160,8 +160,25 @@ describe("SendMessageBodySchema", () => {
 
   it("gives every parse its own attachments array (a shared default would leak between requests)", () => {
     const first = SendMessageBodySchema.parse({ content: "a" });
-    first.attachments.push("https://x.test/leak.png");
+    first.attachments.push({ mediaAssetId: "leak" });
     expect(SendMessageBodySchema.parse({ content: "b" }).attachments).toEqual([]);
+  });
+
+  it("takes attachments as library file ids, in order, each at most once, at most 10", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => ({ mediaAssetId: `asset${i}` }));
+    expect(SendMessageBodySchema.parse({ content: "hi", attachments: ids(2) }).attachments).toEqual([{ mediaAssetId: "asset0" }, { mediaAssetId: "asset1" }]);
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: ids(10) }).success).toBe(true);
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: ids(11) }).success).toBe(false);
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: [{ mediaAssetId: "a" }, { mediaAssetId: "a" }] }).success).toBe(false);
+  });
+
+  it.each([
+    [["https://x.test/a.png"]],
+    [[{ mediaAssetId: "../../etc" }]],
+    [[{ mediaAssetId: "" }]],
+    [[{ mediaAssetId: "a", url: "https://x.test/a.png" }]],
+  ])("refuses attachments that aren't plain library ids: %j", (attachments) => {
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments }).success).toBe(false);
   });
 
   it("rejects NUL characters, which Postgres cannot store", () => {
@@ -186,11 +203,8 @@ describe("SendMessageBodySchema", () => {
     expect(SendMessageBodySchema.safeParse({ content: "hi", clientMessageId: null }).success).toBe(false);
   });
 
-  it("limits attachments to 10 http(s) URLs", () => {
-    const url = "https://cdn.example.com/a.png";
-    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: Array(10).fill(url) }).success).toBe(true);
-    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: Array(11).fill(url) }).success).toBe(false);
-    for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,x", "nope"]) {
+  it("never takes raw links as attachments: files come from the user's library", () => {
+    for (const bad of ["https://cdn.example.com/a.png", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,x"]) {
       expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: [bad] }).success).toBe(false);
     }
   });

@@ -4,7 +4,7 @@ import { prisma, type Prisma } from "#src/db/client.js";
 import { CursorTimestampSchema, IdSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
 import { requireChat } from "#src/services/chats.js";
 import { RETRYABLE_STATUSES } from "#src/services/runs.js";
-import { serializeMessage } from "#src/services/serialize.js";
+import { WITH_ATTACHMENTS, serializeMessage } from "#src/services/serialize.js";
 
 type MessageListQuery = z.infer<typeof MessageListQuerySchema>;
 type MessageListResponse = z.infer<typeof MessageListResponseSchema>;
@@ -29,7 +29,7 @@ export async function listMessages(
     status: { not: "STREAMING" },
     ...(after && { OR: [{ createdAt: { lt: after[0] } }, { createdAt: after[0], id: { lt: after[1] } }] }),
   };
-  const rows = await db.message.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1 });
+  const rows = await db.message.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1, include: WITH_ATTACHMENTS });
   const page = rows.slice(0, limit);
   const oldest = page[page.length - 1];
 

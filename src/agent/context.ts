@@ -31,6 +31,20 @@ export function renderReply(blocks: ContentBlock[], fallbackText: string | null,
 }
 
 /**
+ * What the model is told about a user's message: its text, then one line per attached file, in order. A file that has
+ * expired gets a line without a link, so the model knows it was there but can't hand a dead link to a tool (the tools
+ * only accept links that appear in the conversation).
+ */
+export function renderQuestion(text: string | null, files: readonly { type: "IMAGE" | "VIDEO" | "AUDIO"; url: string; expiresAt: Date | null }[], now = new Date()): string {
+  const lines = text?.trim() ? [text] : [];
+  for (const file of files) {
+    const label = MEDIA_LABEL[file.type === "IMAGE" ? "image" : file.type === "VIDEO" ? "video" : "audio"];
+    lines.push(file.expiresAt && file.expiresAt.getTime() <= now.getTime() ? `[Attached ${label} (expired)]` : `[Attached ${label}: ${file.url}]`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * The conversation up to and including the message being answered, oldest first, as the model should read it.
  *
  * The cut-off is the question itself, so a retry sees exactly what the first attempt saw. The reply being written is
@@ -40,6 +54,7 @@ export async function loadConversation(
   chatId: string,
   triggerMessageId: string,
   db: Pick<typeof prisma, "message"> = prisma,
+  now = new Date(),
 ): Promise<HistoryMessage[]> {
   const trigger = await db.message.findUnique({ where: { id: triggerMessageId }, select: { createdAt: true, id: true, chatId: true } });
   if (!trigger || trigger.chatId !== chatId) return [];
@@ -55,7 +70,13 @@ export async function loadConversation(
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: CONTEXT_MESSAGE_LIMIT,
-    select: { role: true, status: true, content: true, contentBlocks: true },
+    select: {
+      role: true,
+      status: true,
+      content: true,
+      contentBlocks: true,
+      attachments: { orderBy: { position: "asc" }, select: { mediaAsset: { select: { type: true, url: true, expiresAt: true } } } },
+    },
   });
 
   // newest first until the budget runs out; the question itself (the first one) is always kept
@@ -64,7 +85,7 @@ export async function loadConversation(
   for (const row of rows) {
     const content =
       row.role === "USER"
-        ? (row.content ?? "")
+        ? renderQuestion(row.content, row.attachments.map((file) => file.mediaAsset), now)
         : renderReply(ContentBlocksSchema.parse(Array.isArray(row.contentBlocks) ? row.contentBlocks : []), row.content, row.status === "COMPLETED");
     if (!content.trim()) continue; // nothing the model could use (an empty or text-only failed reply)
     if (kept.length > 0 && used + content.length > CONTEXT_CHAR_BUDGET) break;

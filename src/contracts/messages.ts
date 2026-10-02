@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { CursorQuerySchema, IsoDateTimeSchema, NO_NUL_MESSAGE, noNul } from "./common.js";
+import { MediaAssetSchema } from "./media.js";
+import { MAX_ATTACHMENTS } from "./uploads.js";
 
 export const MessageRoleSchema = z.enum(["USER", "ASSISTANT", "SYSTEM", "TOOL"]);
 
@@ -92,6 +94,10 @@ export const ContentBlocksSchema = z.array(z.unknown()).transform((items) =>
   }),
 );
 
+// A file attached to a user's message, in the order it was attached. `expired` once the upload service has deleted it
+// (uploads last 23 hours): show a placeholder instead of the broken link.
+export const MessageAttachmentSchema = MediaAssetSchema.extend({ expired: z.boolean() });
+
 export const MessageSchema = z.object({
   id: z.string(),
   chatId: z.string(),
@@ -109,6 +115,8 @@ export const MessageSchema = z.object({
   // true only on the reply that can be retried right now (POST /api/runs/{agentRunId}/retry): the chat's latest turn,
   // when it failed or was stopped
   canRetry: z.boolean().optional(),
+  // a user message's files, in order; absent when it has none
+  attachments: z.array(MessageAttachmentSchema).optional(),
 });
 
 // The text is stored exactly as typed (indentation and code blocks matter), so it is only checked for
@@ -119,7 +127,12 @@ export const SendMessageBodySchema = z.strictObject({
     .max(32_000)
     .refine((text) => text.trim().length > 0, { error: "Message can't be empty." })
     .refine(noNul, { error: NO_NUL_MESSAGE }),
-  attachments: z.array(z.httpUrl()).max(10).default([]),
+  // files from the user's media library (uploaded or generated), in the order the model should see them
+  attachments: z
+    .array(z.strictObject({ mediaAssetId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, { error: "That isn't a file from your library." }) }))
+    .max(MAX_ATTACHMENTS, { error: `A message can carry at most ${MAX_ATTACHMENTS} files.` })
+    .refine((files) => new Set(files.map((file) => file.mediaAssetId)).size === files.length, { error: "Each file can be attached once." })
+    .default([]),
   // lower-cased, so the same id in a different case can't slip past the server's duplicate check
   clientMessageId: z
     .uuid()
@@ -150,6 +163,7 @@ export const MessageListResponseSchema = z.object({
 
 export type Message = z.infer<typeof MessageSchema>;
 export type ContentBlock = z.infer<typeof ContentBlockSchema>;
+export type MessageAttachment = z.infer<typeof MessageAttachmentSchema>;
 export type ToolCallBlock = z.infer<typeof ToolCallBlockSchema>;
 export type ToolResultBlock = z.infer<typeof ToolResultBlockSchema>;
 export type ImageBlock = z.infer<typeof ImageBlockSchema>;

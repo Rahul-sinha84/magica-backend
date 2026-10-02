@@ -58,8 +58,12 @@ async function finishWithRetry(runId: string, outcome: Parameters<typeof finaliz
   }
 }
 
-/** The lines the history uses to tell the model about earlier media, e.g. "[Generated image: https://…]". */
-const MEDIA_PLACEHOLDER = /[ \t]*\[Generated (?:image|video|audio): [^\]\s]+\][ \t]*/g;
+/**
+ * The lines the history uses to tell the model about media: what was generated ("[Generated image: https://…]") and
+ * what the user attached ("[Attached video: https://…]", "[Attached image (expired)]"). Models sometimes copy them
+ * into their answer; the user already sees the media, so they are removed.
+ */
+const MEDIA_PLACEHOLDER = /[ \t]*\[(?:Generated|Attached) (?:image|video|audio)(?:: [^\]\s]+| \(expired\))\][ \t]*/g;
 
 /**
  * Models sometimes copy those lines into their answer, which would show users a raw link (the media itself is already
@@ -69,7 +73,15 @@ export function withoutMediaPlaceholders(blocks: ContentBlock[]): ContentBlock[]
   return blocks.flatMap((block) => {
     if (block.type !== "text" || !MEDIA_PLACEHOLDER.test(block.content)) return [block];
     MEDIA_PLACEHOLDER.lastIndex = 0;
-    const content = block.content.replace(MEDIA_PLACEHOLDER, "").replace(/\n{3,}/g, "\n\n").trim();
+    // between two words a removed placeholder leaves one space, so they don't run together; elsewhere it leaves nothing
+    const content = block.content
+      .replace(MEDIA_PLACEHOLDER, (match: string, offset: number, text: string) => {
+        const before = text[offset - 1];
+        const after = text[offset + match.length];
+        return before !== undefined && after !== undefined && before !== "\n" && after !== "\n" ? " " : "";
+      })
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
     return content ? [{ ...block, content }] : [];
   });
 }

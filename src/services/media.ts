@@ -3,6 +3,7 @@ import type { AudioBlock, ImageBlock, MediaAsset, MediaListQuery, MediaListRespo
 import { prisma, Prisma } from "#src/db/client.js";
 import type { MediaAsset as MediaAssetRow } from "#src/generated/prisma/client.js";
 import { CursorTimestampSchema, IdSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
+import { AppError } from "#src/lib/errors.js";
 import { containsPattern } from "#src/lib/search.js";
 
 // Shared by the API (the library) and the worker (generated media is added when a tool call completes), so it must not
@@ -66,6 +67,26 @@ export async function addGeneratedMedia(tx: Tx, toolInvocationId: string, assets
     })),
   });
   return count;
+}
+
+/**
+ * The user's files for a message, in the order given: each must be in their own library and still there (an upload
+ * past its lifetime is gone). Read inside the send's transaction, so what is attached is what was checked.
+ */
+export async function attachableAssets(tx: Tx, userId: string, refs: readonly { mediaAssetId: string }[], now = new Date()): Promise<MediaAssetRow[]> {
+  if (refs.length === 0) return [];
+  const rows = await tx.mediaAsset.findMany({ where: { userId, id: { in: refs.map((ref) => ref.mediaAssetId) } } });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return refs.map((ref, index) => {
+    const field = `attachments.${index}`;
+    const asset = byId.get(ref.mediaAssetId);
+    // another user's file and one that doesn't exist look the same: nothing about other libraries leaks
+    if (!asset) throw new AppError("VALIDATION_FAILED", `${field}: That file isn't in your library.`, { fields: { [field]: ["Not in your library."] } });
+    if (asset.expiresAt && asset.expiresAt.getTime() <= now.getTime()) {
+      throw new AppError("VALIDATION_FAILED", `${field}: This file has expired. Upload it again.`, { fields: { [field]: ["Expired."] } });
+    }
+    return asset;
+  });
 }
 
 const MediaCursorSchema = z.tuple([CursorTimestampSchema, IdSchema]);

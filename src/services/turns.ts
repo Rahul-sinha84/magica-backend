@@ -11,7 +11,8 @@ import { hold } from "#src/services/credits.js";
 import { reconcileChat, reconcileUserRuns } from "#src/services/reconcile.js";
 import { requireChat } from "#src/services/chats.js";
 import { ACTIVE_STATUSES, RETRYABLE_STATUSES, finalizeRun } from "#src/services/runs.js";
-import { serializeMessage } from "#src/services/serialize.js";
+import { attachableAssets } from "#src/services/media.js";
+import { WITH_ATTACHMENTS, serializeMessage } from "#src/services/serialize.js";
 
 const PROVISIONAL_TITLE_MAX = 50;
 const DISPATCH_TIMEOUT_MS = 8_000;
@@ -41,14 +42,15 @@ async function replay(chatId: string, body: SendMessageBody, replayWaitMs: numbe
   const find = () =>
     prisma.message.findFirst({
       where: { chatId, clientMessageId: body.clientMessageId },
-      include: { triggeredRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, triggerRunId: true } } },
+      include: { triggeredRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, triggerRunId: true } }, ...WITH_ATTACHMENTS },
     });
 
   let existing = await find();
   if (!existing) return null;
   // the same id must mean the same message: anything else is a client bug, and quietly answering with the
   // earlier turn would hide it
-  if (existing.content !== body.content) {
+  const sameFiles = existing.attachments.map((file) => file.mediaAssetId).join() === body.attachments.map((file) => file.mediaAssetId).join();
+  if (existing.content !== body.content || !sameFiles) {
     throw new AppError("VALIDATION_FAILED", "clientMessageId: That id was already used for a different message.", {
       fields: { clientMessageId: ["Already used for a different message."] },
     });
@@ -73,9 +75,12 @@ function createTurn(userId: string, chatId: string, body: SendMessageBody, trace
   return prisma.$transaction(async (tx) => {
     const now = new Date();
     const replyAt = new Date(now.getTime() + 1); // strictly after the question, so history always reads question then answer
-    const userMessage = await tx.message.create({
+    const files = await attachableAssets(tx, userId, body.attachments, now); // refuses (and rolls back) before anything is written
+    const created = await tx.message.create({
       data: { chatId, userId, role: "USER", status: "COMPLETED", content: body.content, clientMessageId: body.clientMessageId ?? null, createdAt: now },
     });
+    if (files.length > 0) await tx.attachment.createMany({ data: files.map((file, position) => ({ messageId: created.id, mediaAssetId: file.id, position })) });
+    const userMessage = { ...created, attachments: files.map((mediaAsset, position) => ({ position, mediaAsset })) };
     const assistantMessage = await tx.message.create({
       data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
     });
@@ -143,9 +148,6 @@ export async function sendMessage(
   { dispatchTimeoutMs = DISPATCH_TIMEOUT_MS, replayWaitMs = REPLAY_WAIT_MS }: SendOptions = {},
 ): Promise<SentTurn> {
   const body = { ...received, content: wellFormed(received.content) }; // exactly what will be stored, so replays compare equal
-  if (body.attachments.length > 0) {
-    throw new AppError("VALIDATION_FAILED", "attachments: Attachments aren't supported yet.", { fields: { attachments: ["Not supported yet."] } });
-  }
   const chat = await requireChat(userId, chatId);
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -188,7 +190,7 @@ const replyGone = () => new AppError("NOT_FOUND", "That reply isn't there any mo
 /** A retry of this run that was already started (a double click, a repeated request): the same turn, never a second. */
 async function existingRetry(runId: string, replayWaitMs: number): Promise<SentTurn | null> {
   const find = () =>
-    prisma.agentRun.findUnique({ where: { retryOfRunId: runId }, select: { id: true, triggerRunId: true, triggerMessage: true } });
+    prisma.agentRun.findUnique({ where: { retryOfRunId: runId }, select: { id: true, triggerRunId: true, triggerMessage: { include: WITH_ATTACHMENTS } } });
   let retry = await find();
   if (!retry) return null;
   // the first request may still be handing it to Trigger.dev; give it a moment rather than fail a double click
@@ -227,7 +229,7 @@ function createRetryTurn(userId: string, original: { id: string; chatId: string;
     if (!status || !RETRYABLE_STATUSES.includes(status)) throw notRetryable("Only a failed or stopped reply can be retried.");
 
     const replyAt = new Date(); // after the failed reply, so the new answer reads below it
-    const userMessage = await tx.message.findUniqueOrThrow({ where: { id: original.triggerMessageId } });
+    const userMessage = await tx.message.findUniqueOrThrow({ where: { id: original.triggerMessageId }, include: WITH_ATTACHMENTS });
     const assistantMessage = await tx.message.create({
       data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
     });
