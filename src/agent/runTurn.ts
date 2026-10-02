@@ -12,6 +12,7 @@ import { finalizeRun, toJson } from "#src/services/runs.js";
 import { turnToolCost } from "#src/services/toolInvocations.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
 import type { ToolRegistry } from "#src/tools/registry.js";
+import { createWaiter, type WaitTokens } from "#src/waitpoints/wait.js";
 
 export type TurnResult = "completed" | "failed" | "cancelled" | "skipped";
 
@@ -38,6 +39,8 @@ export interface TurnTools {
   runMagicaCalls: (calls: MagicaToolPayload[]) => Promise<InvocationOutcome[]>;
   /** Model calls allowed in one turn. */
   maxSteps?: number;
+  /** Waitpoint tokens, for pausing until the user answers (plan approval, spend approval). Without them the turn can't wait. */
+  waitpoints?: WaitTokens;
 }
 
 /** A turn may call the model at most this many times (each step may use tools); then it stops with what it has. */
@@ -169,6 +172,24 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
     // the only links a tool may use: ones that appear in the conversation, plus media the turn itself creates
     const knownUrls = new Set(history.flatMap((message) => linksIn(message.content)));
     const maxSteps = tools?.maxSteps ?? MAX_STEPS;
+    const waiter =
+      tools?.waitpoints &&
+      createWaiter({
+        runId,
+        tokens: tools.waitpoints,
+        emit: (chunk) => {
+          chunks.push(chunk);
+          emit(chunk);
+        },
+        checkpoint: async () => {
+          lastSave = now();
+          return save();
+        },
+        setStatus,
+        now,
+        log: logger,
+        signal: controller.signal,
+      });
 
     const usage = { model: null as string | null, inputTokens: 0, outputTokens: 0 };
     let announcedAnswer = false;
@@ -261,6 +282,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
           lastSave = now();
           await save();
         },
+        ...(waiter && { waitFor: waiter }),
       });
       if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("stopped", "AbortError");
       lastSave = now();

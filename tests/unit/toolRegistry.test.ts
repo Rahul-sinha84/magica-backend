@@ -2,6 +2,7 @@ import { pino } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { CropImageInputSchema, GptImage2InputSchema, LoadSkillInputSchema, MergeVideosInputSchema, ReadSkillAssetInputSchema } from "#src/contracts/index.js";
+import { TurnError } from "#src/agent/turnError.js";
 import { agentTools } from "#src/tools/index.js";
 import { createToolRegistry, defineTool, describeIssues, displayInput, sanitizeInput, ToolError, type ToolContext } from "#src/tools/registry.js";
 import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
@@ -54,6 +55,12 @@ describe("executing a tool", () => {
   it("passes on a tool's own safe error", async () => {
     const registry = createToolRegistry([echo(vi.fn().mockRejectedValue(new ToolError("TOOL_FAILED", "The image service is busy, please try again.")))]);
     expect(await registry.execute("echo", { text: "x" }, context().ctx)).toEqual({ ok: false, code: "TOOL_FAILED", message: "The image service is busy, please try again." });
+  });
+
+  it("lets an error that ends the turn (a waitpoint that expired or was stopped) through, for the turn to handle", async () => {
+    const expired = new TurnError("WAITPOINT_EXPIRED", "This approval expired. Send a new message to continue.");
+    const registry = createToolRegistry([echo(vi.fn().mockRejectedValue(expired))]);
+    await expect(registry.execute("echo", { text: "x" }, context().ctx)).rejects.toBe(expired);
   });
 
   it("hides an unexpected error behind a generic message, and logs it", async () => {

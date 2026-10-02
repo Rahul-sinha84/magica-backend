@@ -4,7 +4,7 @@ import type { MagicaToolPayload } from "#src/agent/payload.js";
 import type { ChatMessage, ToolCallEvent } from "#src/lib/openrouter.js";
 import { createInvocation, endInvocation, InsufficientCreditsForTool } from "#src/services/toolInvocations.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
-import { displayInput, displayResult, sanitizeInput, type ToolDefinition, type ToolRegistry } from "#src/tools/registry.js";
+import { displayInput, displayResult, sanitizeInput, type ToolDefinition, type ToolRegistry, type WaitFor } from "#src/tools/registry.js";
 
 // One step's tool calls: check each, run them (inline tools at once, Magica tools as one batch of durable child tasks),
 // stream their progress, and turn their outcomes into the messages the model reads next. Results always go back in
@@ -29,6 +29,8 @@ export interface ToolStepDeps {
   step: number;
   /** Saves the reply so far; called once the tool cards have started, so a reload mid-tool shows them running. */
   checkpoint?: () => Promise<void>;
+  /** Pauses the turn until the user answers; `key` names the asking within the run. Absent when the turn can't wait. */
+  waitFor?: (key: string) => WaitFor;
 }
 
 export interface ToolStepResult {
@@ -79,9 +81,11 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
   const context = { agentRunId: deps.agentRunId, chatId: deps.chatId, userId: deps.userId, log, signal: deps.signal };
   await Promise.all(
     plans.map(async (plan, i) => {
-      if (plan.kind !== "inline") return;
+      const call = calls[i];
+      if (plan.kind !== "inline" || !call) return;
       const started = now();
-      const result = await registry.execute(plan.tool.name, plan.input, context);
+      // a tool that asks the user something asks under its own call, so asking again (same call) gives the same waitpoint
+      const result = await registry.execute(plan.tool.name, plan.input, { ...context, ...(deps.waitFor && { waitFor: deps.waitFor(keyOf(call)) }) });
       outcomes[i] = result.ok ? { ok: true, output: result.output, durationMs: now() - started, creditCost: 0, tool: plan.tool, input: plan.input } : { ok: false, message: result.message, durationMs: now() - started };
     }),
   );

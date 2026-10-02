@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CursorQuerySchema, IsoDateTimeSchema, NO_NUL_MESSAGE, noNul } from "./common.js";
 import { MediaAssetSchema } from "./media.js";
 import { MAX_ATTACHMENTS } from "./uploads.js";
+import { WaitpointBlockSchema } from "./waitpoints.js";
 
 export const MessageRoleSchema = z.enum(["USER", "ASSISTANT", "SYSTEM", "TOOL"]);
 
@@ -81,6 +82,7 @@ export const ContentBlockSchema = z.discriminatedUnion("type", [
   ToolResultBlockSchema,
   CitationBlockSchema,
   UsageBlockSchema,
+  WaitpointBlockSchema,
 ]);
 
 // Lenient: used when reading. One block we don't understand (for example a type added by a newer

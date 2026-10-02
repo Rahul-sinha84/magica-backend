@@ -11,6 +11,7 @@ import { parseChatId, requireChat } from "#src/services/chats.js";
 import { reconcileRun } from "#src/services/reconcile.js";
 import { ACTIVE_STATUSES, finalizeRun, findActiveRun } from "#src/services/runs.js";
 import { realtimeAccess, retryRun } from "#src/services/turns.js";
+import { pendingWaitpoint } from "#src/services/waitpoints.js";
 
 const noActiveRun = () => new AppError("NOT_FOUND", "That run isn't active.");
 
@@ -29,12 +30,13 @@ export function runsRouter(sendLimit: RequestHandler): Router {
     if (run && (await reconcileRun(run))) run = null; // a run that is really dead must not look alive
 
     if (!run) {
-      res.json(ActiveRunResponseSchema.parse({ run: null, realtimeToken: null, realtimeTokenExpiresAt: null, partialText: null, partialBlocks: [] }));
+      res.json(ActiveRunResponseSchema.parse({ run: null, realtimeToken: null, realtimeTokenExpiresAt: null, partialText: null, partialBlocks: [], pendingWaitpoint: null }));
       return;
     }
 
     const partialBlocks = ContentBlocksSchema.parse(Array.isArray(run.assistantMessage.contentBlocks) ? run.assistantMessage.contentBlocks : []);
     const access = run.triggerRunId ? await realtimeAccess(run.triggerRunId) : null;
+    const waiting = await pendingWaitpoint(run.id);
     res.json(
       ActiveRunResponseSchema.parse({
         run: {
@@ -49,6 +51,7 @@ export function runsRouter(sendLimit: RequestHandler): Router {
         realtimeTokenExpiresAt: access?.token ? access.expiresAt.toISOString() : null,
         partialText: blocksToText(partialBlocks),
         partialBlocks,
+        pendingWaitpoint: waiting,
       }),
     );
   });

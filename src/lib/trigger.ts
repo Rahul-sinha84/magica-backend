@@ -1,4 +1,4 @@
-import { auth, configure, runs, tasks } from "@trigger.dev/sdk";
+import { auth, configure, runs, tasks, wait } from "@trigger.dev/sdk";
 import { AGENT_QUEUE_TTL_SECONDS, AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
 import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
@@ -54,6 +54,11 @@ export async function getTriggerRunStatus(triggerRunId: string): Promise<string 
     logger.warn({ err, triggerRunId }, "could not look up the Trigger.dev run");
     return null;
   }
+}
+
+/** Wakes a run waiting on this waitpoint token, handing it `output` (the user's answer). Throws if Trigger.dev can't be reached. */
+export async function completeWaitpointToken(tokenId: string, output: Record<string, unknown>): Promise<void> {
+  await withTimeout(wait.completeToken(tokenId, output), "answering the waitpoint");
 }
 
 /** A read-only token that lets the browser follow this one run (status and streamed text), for an hour. */

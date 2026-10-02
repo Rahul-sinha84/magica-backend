@@ -2,7 +2,7 @@ import { AGENT_QUEUE_TTL_SECONDS } from "#src/agent/payload.js";
 import { cancelTriggerRun, getTriggerRunStatus } from "#src/lib/trigger.js";
 import { logger } from "#src/lib/logger.js";
 import { prisma } from "#src/db/client.js";
-import { ACTIVE_STATUSES, finalizeRun, findActiveRun, type ActiveRun, type RunOutcome } from "#src/services/runs.js";
+import { ACTIVE_STATUSES, finalizeRun, findActiveRun, WAITPOINT_EXPIRED, type ActiveRun, type RunOutcome } from "#src/services/runs.js";
 
 // A run can be left "active" if a worker dies or a step is lost. Nothing is allowed to stay locked forever: these
 // rules find such runs and end them through the same `finalizeRun` as everything else.
@@ -23,6 +23,9 @@ export const MAX_RUN_MS = 11 * 60_000;
 // using tools can legitimately run longer. While a tool call is in flight, the limit is that call's own: the Magica
 // tool task's maxDuration (7 minutes) plus slack, counted from when the call was made.
 export const TOOL_CALL_LIMIT_MS = 8 * 60_000;
+// Waiting for the user's answer doesn't count either: a waiting run is healthy until its waitpoint expires, plus this
+// long for the run to wake and end itself.
+export const WAITPOINT_SLACK_MS = 2 * 60_000;
 const LOOKUP_EVERY_MS = 15_000; // at most one Trigger.dev lookup per run in this window, however often it is polled
 
 // the last answer Trigger.dev gave about each run, so a poll between lookups still knows what it said
@@ -96,12 +99,29 @@ export async function reconcileRun(run: ActiveRun, { force = false, now = Date.n
   }
 
   // whatever Trigger.dev says (or cannot say), nothing is allowed to outlive the task's own time limit, except while it
-  // is waiting for a tool call that is still within that call's own limit
-  if (overLimit && !(await waitingOnATool(run.id, now))) {
-    await end(failed("AGENT_TIMEOUT", "The agent took too long. Please try again."));
+  // waits (for a tool call or the user's answer) within that wait's own limit
+  const overrun = overLimit ? await overrunOutcome(run.id, now) : null;
+  if (overrun) {
+    await end(overrun);
     return true;
   }
   return false;
+}
+
+/**
+ * For a run past MAX_RUN_MS since it started: how it should end, or null if it is still legitimately going. Waits
+ * don't count against the task's time limit, so it is fine while it waits for a tool call or for the user's answer
+ * (until the waitpoint expires), and for MAX_RUN_MS after it last resumed from one.
+ */
+async function overrunOutcome(runId: string, now: number): Promise<RunOutcome | null> {
+  if (await waitingOnATool(runId, now)) return null;
+  const waitpoint = await prisma.waitpoint.findFirst({ where: { agentRunId: runId }, orderBy: { createdAt: "desc" }, select: { status: true, expiresAt: true, resolvedAt: true } });
+  if (waitpoint?.status === "PENDING") {
+    return now < waitpoint.expiresAt.getTime() + WAITPOINT_SLACK_MS ? null : failed(WAITPOINT_EXPIRED.code, WAITPOINT_EXPIRED.message);
+  }
+  const tool = await prisma.toolInvocation.findFirst({ where: { agentRunId: runId, completedAt: { not: null } }, orderBy: { completedAt: "desc" }, select: { completedAt: true } });
+  const resumedAt = Math.max(waitpoint?.resolvedAt?.getTime() ?? 0, tool?.completedAt?.getTime() ?? 0);
+  return now - resumedAt < MAX_RUN_MS ? null : failed("AGENT_TIMEOUT", "The agent took too long. Please try again.");
 }
 
 /** True while the run has a tool call in flight that is still within the tool call's own time limit. */

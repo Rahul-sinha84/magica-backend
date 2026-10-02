@@ -1,10 +1,13 @@
-// Core tables. Waitpoint arrives later as an additive migration.
+// Core tables.
 // The pg_trgm extension (for the search indexes) is created by the chat_search migration.
 //
 // Constraints Prisma cannot express live as raw SQL at the end of the init migration:
 //   - AgentRun_one_active_per_chat: partial unique index (one PENDING/RUNNING run per chat)
 //   - User_credits_valid: CHECK (balance >= 0 AND held >= 0 AND held <= balance)
 //   - CreditLedger_amount_nonzero: CHECK (amount <> 0)
+// and at the end of the waitpoints migration:
+//   - Waitpoint_one_pending_per_run: partial unique index (one PENDING waitpoint per run)
+//   - Waitpoint_resolved_when_closed, Waitpoint_response_when_answered, Waitpoint_expires_after_creation: CHECKs
 
 generator client {
   provider            = "prisma-client"
@@ -104,6 +107,7 @@ model AgentRun {
   loadedSkills     RunSkill[]
   toolInvocations  ToolInvocation[]
   creditLedger     CreditLedger[]
+  waitpoints       Waitpoint[]
 
   @@index([chatId, createdAt(sort: Desc)])
   @@index([triggerMessageId])
@@ -147,6 +151,27 @@ model ToolInvocation {
   mediaAssets MediaAsset[]
 
   @@unique([agentRunId, toolCallId])
+}
+
+// A pause in a run until the user answers it: approving a plan, or a spend above the approval threshold. The run waits
+// on a Trigger.dev waitpoint token (it uses no worker while it waits); this row is the durable record, and it decides
+// every race between an answer, the expiry and a stop. At most one is pending per run.
+model Waitpoint {
+  id             String          @id @default(cuid())
+  agentRunId     String
+  type           WaitpointType
+  status         WaitpointStatus @default(PENDING)
+  triggerTokenId String          @unique // the Trigger.dev token the run waits on, created before this row
+  payload        Json // what is being approved (a plan, the calls and their costs); validated with Zod by type
+  response       Json? // the answer ({ action, feedback? }), once answered
+  expiresAt      DateTime // the token times out at the same moment
+  resolvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+
+  @@index([agentRunId, createdAt])
 }
 
 // Signed amount, from the point of view of the counter it changes:
@@ -282,6 +307,20 @@ enum ToolInvocationStatus {
   RUNNING
   COMPLETED
   FAILED
+  CANCELLED
+}
+
+enum WaitpointType {
+  PLAN
+  CREDIT
+}
+
+enum WaitpointStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+  EXPIRED
   CANCELLED
 }
 

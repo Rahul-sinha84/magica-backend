@@ -162,7 +162,7 @@ describe("GET /api/chats/:chatId/active-run", () => {
     const { res, body } = await activeRun(chat.id);
     expect(res.status).toBe(200);
     expect(ActiveRunResponseSchema.parse(res.body).run).toBeNull();
-    expect(body).toEqual({ run: null, realtimeToken: null, realtimeTokenExpiresAt: null, partialText: null, partialBlocks: [] });
+    expect(body).toEqual({ run: null, realtimeToken: null, realtimeTokenExpiresAt: null, partialText: null, partialBlocks: [], pendingWaitpoint: null });
   });
 
   it("describes a run that was just sent: pending, with a token to follow it", async () => {

@@ -28,6 +28,10 @@ import {
   SendMessageBodySchema,
   SendMessageResponseSchema,
   UpdateChatBodySchema,
+  PlanPayloadSchema,
+  RespondWaitpointBodySchema,
+  WAITPOINT_ACTIONS,
+  WAITPOINT_LIFETIME_MS,
 } from "#src/contracts/index.js";
 
 const now = "2026-09-30T12:00:00.000Z";
@@ -494,5 +498,54 @@ describe("uploads contract", () => {
     const file = { name: "a.png", size: 1, mimeType: "image/png" };
     expect(CreateUploadsBodySchema.safeParse({ files: Array(MAX_ATTACHMENTS).fill(file) }).success).toBe(true);
     expect(CreateUploadsBodySchema.safeParse({ files: Array(MAX_ATTACHMENTS + 1).fill(file) }).success).toBe(false);
+  });
+});
+
+describe("waitpoints contract", () => {
+  const plan = { title: "Fox", overview: "Make a fox", steps: [{ title: "Generate", tool: "gpt_image_2", estimatedCredits: 1_000_000 }], totalCredits: 1_000_000 };
+  const credit = { calls: [{ toolCallId: "s1-a", toolName: "gpt_image_2", credits: 1_000_000 }], totalCredits: 1_000_000 };
+  const card = { type: "waitpoint", waitpointId: "w1", status: "pending", expiresAt: "2026-10-02T12:30:00.000Z" };
+
+  it("says what each kind can be answered with, and how long one lasts", () => {
+    expect(WAITPOINT_ACTIONS).toEqual({ plan: ["approve", "request_changes"], credit: ["approve", "reject"] });
+    expect(WAITPOINT_LIFETIME_MS).toBe(30 * 60_000);
+  });
+
+  it("ties the payload to the kind, on the card and on the stream", () => {
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "plan", payload: plan }).success).toBe(true);
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "credit", payload: credit }).success).toBe(true);
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "credit", payload: plan }).success).toBe(false);
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "poll", payload: plan }).success).toBe(false);
+    const { type: _type, status: _status, ...start } = card;
+    expect(AgentStreamChunkSchema.safeParse({ ...start, type: "waitpoint-start", waitpointType: "plan", payload: credit }).success).toBe(false);
+  });
+
+  it("never ends a waitpoint as pending", () => {
+    expect(AgentStreamChunkSchema.safeParse({ type: "waitpoint-end", waitpointId: "w1", status: "approved", waitedMs: 1 }).success).toBe(true);
+    expect(AgentStreamChunkSchema.safeParse({ type: "waitpoint-end", waitpointId: "w1", status: "pending", waitedMs: 1 }).success).toBe(false);
+  });
+
+  it.each([
+    [{ ...plan, steps: [] }],
+    [{ ...plan, steps: [{ title: "Generate", estimatedCredits: -1 }] }],
+    [{ ...plan, steps: [{ title: "Generate", estimatedCredits: 1.5 }] }],
+    [{ ...plan, title: " " }],
+    [{ ...plan, steps: Array(21).fill({ title: "Step", estimatedCredits: 0 }) }],
+  ])("refuses a plan that makes no sense: %j", (payload) => {
+    expect(PlanPayloadSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it("reads an answer: feedback trimmed, at most 2000 characters, no unknown fields", () => {
+    expect(RespondWaitpointBodySchema.parse({ action: "request_changes", feedback: "  Red  " })).toEqual({ action: "request_changes", feedback: "Red" });
+    for (const body of [{ action: "approve", feedback: "x".repeat(2001) }, { action: "approve", feedback: " " }, { action: "approve", note: "x" }, { action: "approve", feedback: "a\u0000" }, {}]) {
+      expect(RespondWaitpointBodySchema.safeParse(body).success).toBe(false);
+    }
+  });
+
+  it("adds the waiting status, and a pending waitpoint to the active run that older responses may leave out", () => {
+    expect(AgentStreamMetadataSchema.parse({ status: "waiting", waitpointId: "w1" })).toEqual({ status: "waiting", waitpointId: "w1" });
+    const base = { run: null, realtimeToken: null, realtimeTokenExpiresAt: null, partialText: null, partialBlocks: [] };
+    expect(ActiveRunResponseSchema.safeParse(base).success).toBe(true);
+    expect(ActiveRunResponseSchema.safeParse({ ...base, pendingWaitpoint: null }).success).toBe(true);
   });
 });

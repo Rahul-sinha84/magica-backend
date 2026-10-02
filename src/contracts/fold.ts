@@ -66,6 +66,21 @@ export function foldChunks(chunks: readonly AgentStreamChunk[]): ContentBlock[] 
       case "asset":
         blocks.push({ ...chunk.asset });
         break;
+      case "waitpoint-start": {
+        const known = blocks.some((b) => b.type === "waitpoint" && b.waitpointId === chunk.waitpointId);
+        if (known) break;
+        const { type: _type, ...fields } = chunk;
+        blocks.push({ type: "waitpoint", ...fields, status: "pending" });
+        break;
+      }
+      case "waitpoint-end": {
+        const card = blocks.find((b) => b.type === "waitpoint" && b.waitpointId === chunk.waitpointId);
+        if (card?.type !== "waitpoint" || card.status !== "pending") break;
+        card.status = chunk.status;
+        card.waitedMs = chunk.waitedMs;
+        if (chunk.feedback !== undefined) card.feedback = chunk.feedback;
+        break;
+      }
     }
   }
 

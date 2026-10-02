@@ -185,6 +185,37 @@ describe("foldChunks", () => {
   });
 });
 
+describe("folding waitpoint chunks", () => {
+  const plan = { title: "Fox", overview: "Make a fox", steps: [{ title: "Generate", estimatedCredits: 1_000_000 }], totalCredits: 1_000_000 };
+  const expiresAt = "2026-10-02T12:30:00.000Z";
+  const asked = (waitpointId = "w1"): AgentStreamChunk => ({ type: "waitpoint-start", waitpointId, waitpointType: "plan", payload: plan, expiresAt });
+  const answered = (status: "approved" | "changes_requested" | "expired", extra: { feedback?: string } = {}, waitpointId = "w1"): AgentStreamChunk => ({ type: "waitpoint-end", waitpointId, status, waitedMs: 76_000, ...extra });
+
+  it("shows a pending card when the run starts waiting, and how it was answered when it ends", () => {
+    expect(foldChunks([text("Here is my plan."), asked()])).toEqual([{ type: "text", content: "Here is my plan." }, { type: "waitpoint", waitpointId: "w1", waitpointType: "plan", payload: plan, expiresAt, status: "pending" }]);
+    expect(foldChunks([asked(), answered("changes_requested", { feedback: "Red" })])).toEqual([{ type: "waitpoint", waitpointId: "w1", waitpointType: "plan", payload: plan, expiresAt, status: "changes_requested", feedback: "Red", waitedMs: 76_000 }]);
+  });
+
+  it("ignores a repeated start, an end without a start, and a second end", () => {
+    const blocks = foldChunks([answered("approved", {}, "w0"), asked(), asked(), answered("approved"), answered("expired")]);
+    expect(blocks).toEqual([{ type: "waitpoint", waitpointId: "w1", waitpointType: "plan", payload: plan, expiresAt, status: "approved", waitedMs: 76_000 }]);
+  });
+
+  it("keeps each waitpoint's card to itself", () => {
+    const blocks = foldChunks([asked("w1"), answered("changes_requested", { feedback: "Again" }, "w1"), asked("w2"), answered("approved", {}, "w2")]);
+    expect(blocks.map((b) => b.type === "waitpoint" && [b.waitpointId, b.status])).toEqual([
+      ["w1", "changes_requested"],
+      ["w2", "approved"],
+    ]);
+    for (const block of blocks) expect(ContentBlockSchema.safeParse(block).success).toBe(true);
+    expect(blocksToText(blocks)).toBe("");
+  });
+
+  it("only uses chunks the contract allows", () => {
+    for (const chunk of [asked(), answered("approved", { feedback: "ok" })]) expect(AgentStreamChunkSchema.safeParse(chunk).success).toBe(true);
+  });
+});
+
 describe("blocksToText", () => {
   it("joins text blocks and skips thinking, tools and assets", () => {
     const blocks = foldChunks([thinking("secret"), text("A"), start("t"), end("t"), text("B")]);

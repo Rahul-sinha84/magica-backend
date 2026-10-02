@@ -11,6 +11,8 @@ import { endActiveInvocations } from "#src/services/toolInvocations.js";
 type Tx = Prisma.TransactionClient;
 
 export const ACTIVE_STATUSES = ["PENDING", "RUNNING"] as const;
+/** The turn failed because nobody answered its waitpoint in time (see src/waitpoints/wait.ts). It can be retried. */
+export const WAITPOINT_EXPIRED = { code: "WAITPOINT_EXPIRED", message: "This approval expired. Send a new message to continue." } as const;
 /** A run that ended without an answer, which the user may try again (only the chat's latest turn; see retryRun). */
 export const RETRYABLE_STATUSES: readonly string[] = ["FAILED", "CANCELLED"];
 
@@ -47,6 +49,9 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
 
   // a run never ends with credits still reserved for its tools: any tool call still in progress is ended here, together
   await endActiveInvocations(tx, runId, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended.");
+  // nor with a question still open: an unanswered waitpoint closes with it (expired if that is why the run ended)
+  const waitpointEnd = outcome.errorCode === WAITPOINT_EXPIRED.code ? "EXPIRED" : "CANCELLED";
+  await tx.waitpoint.updateMany({ where: { agentRunId: runId, status: "PENDING" }, data: { status: waitpointEnd, resolvedAt: new Date() } });
 
   const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { assistantMessageId: true, userId: true, chatId: true } });
 
@@ -54,7 +59,7 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
   if (outcome.status !== "COMPLETED") {
     // a tool can't still be running in a reply that has ended: close any open tool card, so none spins forever
     const current = blocks ?? ContentBlocksSchema.parse((await tx.message.findUnique({ where: { id: run.assistantMessageId }, select: { contentBlocks: true } }))?.contentBlocks ?? []);
-    const closed = closeOpenTools(current, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended.");
+    const closed = closeOpenWaitpoints(closeOpenTools(current, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended."), waitpointEnd === "EXPIRED" ? "expired" : "cancelled");
     if (closed !== current) blocks = closed;
   }
   await tx.message.update({
@@ -89,6 +94,12 @@ export function closeOpenTools(blocks: ContentBlock[], reason: string): ContentB
     if (block.type !== "tool_call" || !open.includes(block)) return [block];
     return [{ ...block, status: "failed" as const }, { type: "tool_result" as const, toolCallId: block.toolCallId, toolName: block.toolName, isError: true, errorMessage: reason }];
   });
+}
+
+/** Marks every waitpoint card still waiting for an answer as `status`. Returns the same array when none was waiting. */
+export function closeOpenWaitpoints(blocks: ContentBlock[], status: "expired" | "cancelled"): ContentBlock[] {
+  if (!blocks.some((b) => b.type === "waitpoint" && b.status === "pending")) return blocks;
+  return blocks.map((block) => (block.type === "waitpoint" && block.status === "pending" ? { ...block, status } : block));
 }
 
 /**

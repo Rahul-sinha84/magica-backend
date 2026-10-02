@@ -17,6 +17,13 @@ export const trigger = {
   statuses: new Map<string, string | null>(),
   statusLookups: [] as string[],
   tokenError: null as Error | null,
+  /** Waitpoint tokens completed through the API, in order; and an error to fail the next completions with. */
+  completedTokens: [] as { tokenId: string; output: Record<string, unknown> }[],
+  completeTokenError: null as Error | null,
+  /** Called on each completion, so a test can wake its fake waiting run (see tests/helpers/fakeTokens.ts). */
+  onTokenCompleted: null as ((tokenId: string, output: Record<string, unknown>) => void) | null,
+  /** While set, completing a token waits for it: holds an answer mid-way, to race another against it. */
+  completeTokenGate: null as Promise<void> | null,
 };
 
 export function resetTriggerMock() {
@@ -30,6 +37,10 @@ export function resetTriggerMock() {
   trigger.statuses.clear();
   trigger.statusLookups.length = 0;
   trigger.tokenError = null;
+  trigger.completedTokens.length = 0;
+  trigger.completeTokenError = null;
+  trigger.onTokenCompleted = null;
+  trigger.completeTokenGate = null;
 }
 
 export const triggerModule = {
@@ -55,6 +66,13 @@ export const triggerModule = {
   getTriggerRunStatus: vi.fn((triggerRunId: string): Promise<string | null> => {
     trigger.statusLookups.push(triggerRunId);
     return Promise.resolve(trigger.statuses.has(triggerRunId) ? (trigger.statuses.get(triggerRunId) ?? null) : "EXECUTING");
+  }),
+
+  completeWaitpointToken: vi.fn(async (tokenId: string, output: Record<string, unknown>): Promise<void> => {
+    if (trigger.completeTokenGate) await trigger.completeTokenGate;
+    if (trigger.completeTokenError) throw trigger.completeTokenError;
+    trigger.completedTokens.push({ tokenId, output });
+    trigger.onTokenCompleted?.(tokenId, output);
   }),
 
   createRealtimeToken: vi.fn((triggerRunId: string) =>

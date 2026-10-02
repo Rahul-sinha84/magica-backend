@@ -1,16 +1,8 @@
+import { TurnError } from "#src/agent/turnError.js";
 import { FAILURE_INFO, ModelError } from "#src/lib/openrouter.js";
 import { finalizeRun } from "#src/services/runs.js";
 
-/** A failure of our own making, carrying the words that are safe to show. */
-export class TurnError extends Error {
-  constructor(
-    readonly code: string,
-    readonly safeMessage: string,
-  ) {
-    super(safeMessage);
-    this.name = "TurnError";
-  }
-}
+export { TurnError };
 
 const GENERIC = { code: "AGENT_ERROR", message: "The agent ran into a problem. Please try again." };
 const TIMEOUT = { code: "AGENT_TIMEOUT", message: "The agent took too long. Please try again." };

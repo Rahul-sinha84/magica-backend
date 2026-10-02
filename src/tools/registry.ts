@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import { z } from "zod";
-import type { ContentBlock } from "#src/contracts/index.js";
+import { TurnError } from "#src/agent/turnError.js";
+import type { ContentBlock, CreditPayload, PlanPayload } from "#src/contracts/index.js";
 import { ToolError, type ToolErrorCode } from "#src/tools/errors.js";
 
 export { ToolError, type ToolErrorCode };
@@ -15,6 +16,19 @@ export interface ToolContext {
   userId: string;
   log: Logger;
   signal: AbortSignal;
+  /** Pauses the turn until the user answers (see src/waitpoints/wait.ts). Absent where the turn can't wait. */
+  waitFor?: WaitFor;
+}
+
+/** The user's answer to a waitpoint. An expired or stopped one never returns: it ends the turn (a TurnError). */
+export interface WaitAnswer {
+  status: "approved" | "changes_requested" | "rejected";
+  feedback?: string;
+}
+
+export interface WaitFor {
+  (type: "plan", payload: PlanPayload): Promise<WaitAnswer>;
+  (type: "credit", payload: CreditPayload): Promise<WaitAnswer>;
 }
 
 
@@ -147,7 +161,9 @@ export function createToolRegistry(definitions: ToolDefinition[]): ToolRegistry 
       try {
         output = await tool.execute(input, context);
       } catch (error) {
-        // a tool's own safe errors are passed on; anything else is logged and replaced by a generic message
+        // a tool's own safe errors are passed on; anything else is logged and replaced by a generic message, except
+        // what ends the whole turn (a waitpoint that expired or was stopped), which is the turn's to handle
+        if (error instanceof TurnError) throw error;
         if (error instanceof ToolError) return { ok: false, code: error.code, message: error.message };
         context.log.error({ err: error, tool: name }, "tool failed unexpectedly");
         return { ok: false, code: "TOOL_FAILED", message: `${name} failed. Please try again.` };
