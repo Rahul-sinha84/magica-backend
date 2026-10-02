@@ -138,6 +138,17 @@ describe("server env: Transloadit", () => {
   });
 });
 
+describe("server env: PUBLIC_API_URL", () => {
+  it("is optional, and kept as a bare https origin", () => {
+    expect(parseServer().PUBLIC_API_URL).toBeUndefined();
+    expect(parseServer({ PUBLIC_API_URL: "https://api.example.com/some/path/" }).PUBLIC_API_URL).toBe("https://api.example.com");
+  });
+
+  it.each(["http://api.example.com", "not a url", "ftp://api.example.com"])("refuses %s", (value) => {
+    expect(() => parseServer({ PUBLIC_API_URL: value })).toThrow(/PUBLIC_API_URL/);
+  });
+});
+
 describe("worker env", () => {
   it("parses without Clerk or Trigger keys", () => {
     expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({

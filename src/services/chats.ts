@@ -4,6 +4,7 @@ import type { Chat as ChatRow } from "#src/generated/prisma/client.js";
 import type { ChatListQuerySchema, ChatListResponseSchema, ChatSearchQuery, UpdateChatBody } from "#src/contracts/index.js";
 import { AppError } from "#src/lib/errors.js";
 import { CursorTimestampSchema, IdSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
+import { containsPattern } from "#src/lib/search.js";
 import { cancelTriggerRun } from "#src/lib/trigger.js";
 import { ACTIVE_STATUSES, finalizeRun } from "#src/services/runs.js";
 import { serializeChat } from "#src/services/serialize.js";
@@ -61,8 +62,7 @@ export async function listChats(userId: string, { cursor, limit }: ChatListQuery
 
 const SearchCursorSchema = z.tuple([CursorTimestampSchema, IdSchema]);
 
-/** A LIKE pattern matching `text` anywhere. `%`, `_` and `\` are taken literally (backslash is Postgres' LIKE escape). */
-export const containsPattern = (text: string) => `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+export { containsPattern } from "#src/lib/search.js";
 
 /**
  * The caller's chats whose title or any message contains `q` (ignoring case), most recent activity first, one entry per

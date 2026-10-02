@@ -73,6 +73,10 @@ describe("each tool, end to end against Magica", () => {
     });
     expect(await row(invocation.id)).toMatchObject({ status: "COMPLETED", magicaRunId: "mg_run_1", creditCost: 1_000_000, providerCost: 7644, durationMs: 9_000 });
     expect(await credits(user.id)).toEqual({ balance: 9_000_000, held: 0 });
+    // and the image is in the user's media library, with what it was made from
+    expect(await prisma.mediaAsset.findMany({ select: { userId: true, source: true, type: true, url: true, prompt: true, model: true, width: true, height: true, mimeType: true, expiresAt: true, toolInvocationId: true } })).toEqual([
+      { userId: user.id, source: "GENERATED", type: "IMAGE", url: "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png", prompt: "A red fox in snow", model: "GPT Image 2", width: 1024, height: 1024, mimeType: "image/png", expiresAt: null, toolInvocationId: invocation.id },
+    ]);
   });
 
   it("gpt_image_2 edit: runs the edit model with the images as uploadedImages", async () => {
@@ -97,6 +101,9 @@ describe("each tool, end to end against Magica", () => {
     const { invocation } = await setup("merge_videos", { video_urls: urls, transition: "fade" });
     expect(await invoke(invocation.id, server.url)).toMatchObject({ status: "COMPLETED", output: { video: { mimeType: "video/mp4", durationMs: 20_022, width: 640, height: 360 } }, assets: [{ type: "video", model: "Merge Videos", mimeType: "video/mp4" }] });
     expect(server.requests.find((r) => r.method === "POST")?.body).toEqual({ input: { video_urls: urls, transition: "fade" } });
+    expect(await prisma.mediaAsset.findMany({ select: { source: true, type: true, model: true, mimeType: true, toolInvocationId: true } })).toEqual([
+      { source: "GENERATED", type: "VIDEO", model: "Merge Videos", mimeType: "video/mp4", toolInvocationId: invocation.id },
+    ]);
   });
 });
 

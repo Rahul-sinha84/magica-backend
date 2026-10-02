@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { IsoDateTimeSchema, NO_NUL_MESSAGE, noNul } from "./common.js";
+import { MediaAssetSchema } from "./media.js";
 
 // Direct uploads go through Transloadit (Community plan). The backend owns these limits; the frontend checks against
 // the same numbers so a bad file is refused before it is sent, and the server checks again (it never trusts the client).
@@ -84,6 +85,23 @@ export const CreateUploadsResponseSchema = z.object({
   ),
 });
 
+// The browser says which Transloadit assembly carried an upload once it finished; the server checks it with Transloadit.
+export const CompleteUploadBodySchema = z.strictObject({
+  assemblyId: z.string().regex(/^[0-9a-f]{32}$/, { error: "That isn't an upload id from the upload service." }),
+});
+
+// Where an upload stands. `pending`: Transloadit is still working (ask again shortly). `completed`: the file is in the
+// library (`asset`). `failed`: it can't be used (`errorMessage` says why, safe to show).
+export const UploadResultSchema = z.object({
+  upload: z.object({
+    id: z.string(),
+    status: z.enum(["pending", "completed", "failed"]),
+    errorMessage: z.string().nullable(),
+    asset: MediaAssetSchema.nullable(),
+  }),
+});
+
 export type UploadFile = z.infer<typeof UploadFileSchema>;
 export type CreateUploadsBody = z.infer<typeof CreateUploadsBodySchema>;
 export type CreateUploadsResponse = z.infer<typeof CreateUploadsResponseSchema>;
+export type UploadResult = z.infer<typeof UploadResultSchema>;

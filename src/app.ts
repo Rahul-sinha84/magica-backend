@@ -14,10 +14,13 @@ import { messagesRouter } from "#src/routes/messages.js";
 import { runsRouter } from "#src/routes/runs.js";
 import { creditsRouter } from "#src/routes/credits.js";
 import { modelsRouter } from "#src/routes/models.js";
-import { uploadsRouter } from "#src/routes/uploads.js";
+import { mediaRouter } from "#src/routes/media.js";
+import { uploadNotificationsRouter, uploadsRouter } from "#src/routes/uploads.js";
+import type { FetchAssembly } from "#src/lib/transloadit.js";
 import { healthRouter } from "#src/routes/health.js";
 
-export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number } = {}): Express {
+// `fetchAssembly` (how Transloadit is asked about an upload) is only replaced in tests.
+export function createApp({ log = logger, rateLimits, sendLimit, fetchAssembly }: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number; fetchAssembly?: FetchAssembly } = {}): Express {
   const app = express();
   app.set("trust proxy", env.TRUST_PROXY);
 
@@ -26,6 +29,8 @@ export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logge
   app.use(corsMiddleware()); // answers preflight requests itself, before anything below can reject them
 
   app.use("/api/health", healthRouter);
+  // Transloadit's server-to-server reports: no user session, proven by an HMAC with our secret instead
+  app.use("/api/uploads/notify", uploadNotificationsRouter);
 
   // Order matters. A request is verified and counted before anything is read or written on its behalf, so an
   // unauthenticated client can't make us parse a large body or touch the database.
@@ -47,7 +52,8 @@ export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logge
   app.use("/api", runsRouter(startsTurn));
   app.use("/api/credits", creditsRouter);
   app.use("/api/models", modelsRouter);
-  app.use("/api/uploads", uploadsRouter);
+  app.use("/api/uploads", uploadsRouter(fetchAssembly ? { fetchAssembly } : {}));
+  app.use("/api/media", mediaRouter);
 
   app.use(notFound);
   app.use(errorHandler);

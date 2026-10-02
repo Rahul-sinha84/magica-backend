@@ -113,6 +113,30 @@ describe("settling", () => {
     expect(await credits(user.id)).toEqual({ balance: 10_000_000 - COST, held: 0 });
   });
 
+  it("adds what the call made to the user's library, exactly once, in the same transaction", async () => {
+    const { user, invocation } = await running();
+    const assets = [
+      { type: "image" as const, url: "https://a.test/1.png", prompt: "A fox", model: "GPT Image 2", width: 1024.4, height: 0, mimeType: "image/png" },
+      { type: "image" as const, url: "javascript:alert(1)" }, // the database refuses it: skipped, the completion still goes through
+      { type: "video" as const, url: "HTTPS://a.test/2.mp4", width: -5 },
+    ];
+    const results = await Promise.all(Array.from({ length: 3 }, () => completeInvocation(invocation.id, { output: { ok: 1 }, durationMs: 10, assets })));
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const library = await prisma.mediaAsset.findMany({ orderBy: { url: "asc" }, select: { userId: true, source: true, type: true, url: true, prompt: true, model: true, width: true, height: true, toolInvocationId: true } });
+    expect(library).toEqual([
+      { userId: user.id, source: "GENERATED", type: "IMAGE", url: "https://a.test/1.png", prompt: "A fox", model: "GPT Image 2", width: 1024, height: null, toolInvocationId: invocation.id },
+      { userId: user.id, source: "GENERATED", type: "VIDEO", url: "https://a.test/2.mp4", prompt: null, model: null, width: null, height: null, toolInvocationId: invocation.id },
+    ]);
+    expect((await ledger(user.id)).filter((e) => e.type === "CHARGE")).toHaveLength(1);
+  });
+
+  it("adds nothing for a call that was stopped before it completed", async () => {
+    const { invocation } = await running();
+    await endInvocation(invocation.id, "CANCELLED", "Stopped.");
+    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1, assets: [{ type: "image", url: "https://a.test/late.png" }] })).toBe(false);
+    expect(await prisma.mediaAsset.count()).toBe(0);
+  });
+
   it("charges once when a completion is reported several times at once", async () => {
     const { user, invocation } = await running();
     const results = await Promise.all(Array.from({ length: 5 }, () => completeInvocation(invocation.id, { output: { ok: 1 }, durationMs: 10 })));

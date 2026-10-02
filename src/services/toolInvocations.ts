@@ -1,7 +1,9 @@
+import type { AudioBlock, ImageBlock, VideoBlock } from "#src/contracts/index.js";
 import { prisma, Prisma } from "#src/db/client.js";
 import { AppError } from "#src/lib/errors.js";
 import { toolChargeKey, toolHoldKey, toolReleaseKey } from "#src/lib/idempotency.js";
 import { charge, hold, release } from "#src/services/credits.js";
+import { addGeneratedMedia } from "#src/services/media.js";
 
 type Tx = Prisma.TransactionClient;
 // JSONB holds plain JSON (undefined keys dropped, as the database would drop them)
@@ -90,6 +92,8 @@ export interface Completion {
   output: unknown;
   durationMs: number;
   providerCost?: number | null;
+  /** what the call made; added to the user's media library in the same transaction */
+  assets?: readonly (ImageBlock | VideoBlock | AudioBlock)[];
 }
 
 /**
@@ -117,6 +121,7 @@ export async function completeInvocation(invocationId: string, done: Completion,
       await release(tx, { ...entry, reason: "tool reservation settled", idempotencyKey: toolReleaseKey(invocationId) });
       await charge(tx, { ...entry, reason: "tool call", idempotencyKey: toolChargeKey(invocationId) });
     }
+    if (done.assets?.length) await addGeneratedMedia(tx, invocationId, done.assets);
     return true;
   });
 }

@@ -41,6 +41,12 @@ export const ServerEnvSchema = BaseEnvSchema.extend({
   // the browser. Optional: without them the API still starts and uploads answer "unavailable" (set both, or neither).
   TRANSLOADIT_AUTH_KEY: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }).optional(),
   TRANSLOADIT_AUTH_SECRET: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }).optional(),
+  // This API's own public https address (e.g. the Railway domain). When set, Transloadit is asked to report finished
+  // uploads to it directly, so an upload completes even if the browser closes. Unset in development (not reachable).
+  PUBLIC_API_URL: z
+    .url({ protocol: /^https$/, error: "must be the API's public https address" })
+    .transform((u) => new URL(u).origin)
+    .optional(),
 })
   .refine((e) => !e.TRANSLOADIT_AUTH_KEY === !e.TRANSLOADIT_AUTH_SECRET, {
     path: ["TRANSLOADIT_AUTH_SECRET"],
