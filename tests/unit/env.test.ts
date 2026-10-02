@@ -108,6 +108,36 @@ describe("server env", () => {
   });
 });
 
+describe("server env: Transloadit", () => {
+  it("is optional: the API starts without it (uploads then answer unavailable)", () => {
+    const parsed = parseServer();
+    expect(parsed.TRANSLOADIT_AUTH_KEY).toBeUndefined();
+    expect(parsed.TRANSLOADIT_AUTH_SECRET).toBeUndefined();
+  });
+
+  it("takes both, trimmed", () => {
+    expect(parseServer({ TRANSLOADIT_AUTH_KEY: " key123 ", TRANSLOADIT_AUTH_SECRET: "secret456\n" })).toMatchObject({ TRANSLOADIT_AUTH_KEY: "key123", TRANSLOADIT_AUTH_SECRET: "secret456" });
+  });
+
+  it.each([
+    ["only the key", { TRANSLOADIT_AUTH_KEY: "key123" }],
+    ["only the secret", { TRANSLOADIT_AUTH_SECRET: "secret456" }],
+  ])("refuses %s", (_label, overrides) => {
+    expect(() => parseServer(overrides)).toThrow(/set both TRANSLOADIT_AUTH_KEY and TRANSLOADIT_AUTH_SECRET, or neither/);
+  });
+
+  it("refuses a pasted value with a space or line break inside, without repeating it", () => {
+    let message = "";
+    try {
+      parseServer({ TRANSLOADIT_AUTH_KEY: "key123", TRANSLOADIT_AUTH_SECRET: "sec ret" });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/TRANSLOADIT_AUTH_SECRET/);
+    expect(message).not.toContain("sec ret");
+  });
+});
+
 describe("worker env", () => {
   it("parses without Clerk or Trigger keys", () => {
     expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({

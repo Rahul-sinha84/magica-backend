@@ -13,6 +13,7 @@ export const ErrorCodeSchema = z.enum([
   "INSUFFICIENT_CREDITS", // 402
   "PAYLOAD_TOO_LARGE", // 413
   "RATE_LIMITED", // 429
+  "UPLOAD_LIMIT_REACHED", // 429: the app's monthly upload allowance is used up (it resets on the 1st)
   "SERVICE_UNAVAILABLE", // 503
   "INTERNAL_ERROR", // 500
 ]);

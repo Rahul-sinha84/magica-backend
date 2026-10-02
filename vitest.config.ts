@@ -19,6 +19,9 @@ export default defineConfig({
       CLERK_SECRET_KEY: "sk_test_placeholder",
       CLERK_PUBLISHABLE_KEY: "pk_test_placeholder",
       TRIGGER_SECRET_KEY: "tr_dev_placeholder",
+      // signing is tested against these; never the real account
+      TRANSLOADIT_AUTH_KEY: "transloadit-test-key",
+      TRANSLOADIT_AUTH_SECRET: "transloadit-test-secret",
       FRONTEND_ORIGIN: "http://localhost:3001",
       OPENROUTER_API_KEY: "sk-or-placeholder",
       // never the real service: tests that need Magica start a fake server and pass its URL explicitly

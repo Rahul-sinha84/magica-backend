@@ -37,10 +37,19 @@ export const ServerEnvSchema = BaseEnvSchema.extend({
   TRIGGER_SECRET_KEY: key.startsWith("tr_"),
   CREDIT_STARTING_BALANCE: credits.default(30_000_000),
   CREDIT_ADMISSION_HOLD: credits.default(100_000),
-}).refine((e) => e.CREDIT_ADMISSION_HOLD <= e.CREDIT_STARTING_BALANCE, {
-  path: ["CREDIT_ADMISSION_HOLD"],
-  error: "must not exceed CREDIT_STARTING_BALANCE",
-});
+  // Transloadit (Community plan) for direct uploads: the API signs each upload with these, so the secret never reaches
+  // the browser. Optional: without them the API still starts and uploads answer "unavailable" (set both, or neither).
+  TRANSLOADIT_AUTH_KEY: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }).optional(),
+  TRANSLOADIT_AUTH_SECRET: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }).optional(),
+})
+  .refine((e) => !e.TRANSLOADIT_AUTH_KEY === !e.TRANSLOADIT_AUTH_SECRET, {
+    path: ["TRANSLOADIT_AUTH_SECRET"],
+    error: "set both TRANSLOADIT_AUTH_KEY and TRANSLOADIT_AUTH_SECRET, or neither",
+  })
+  .refine((e) => e.CREDIT_ADMISSION_HOLD <= e.CREDIT_STARTING_BALANCE, {
+    path: ["CREDIT_ADMISSION_HOLD"],
+    error: "must not exceed CREDIT_STARTING_BALANCE",
+  });
 
 export const WorkerEnvSchema = BaseEnvSchema.extend({
   OPENROUTER_API_KEY: key,

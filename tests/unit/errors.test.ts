@@ -24,11 +24,16 @@ describe("ERROR_STATUS", () => {
     expect(Object.keys(ERROR_STATUS).sort()).toEqual([...ErrorCodeSchema.options].sort());
   });
 
-  it("gives every code its own status, except the two conflicts, which clients tell apart by code", () => {
+  // shared on purpose, and only these: the two conflicts, and the two "too much" answers (a short burst vs. the
+  // month's upload allowance); clients tell each pair apart by code, and neither 429 is retried automatically
+  it("gives every code its own status, except the pairs clients tell apart by code", () => {
     const byStatus = new Map<number, string[]>();
     for (const [code, status] of Object.entries(ERROR_STATUS)) byStatus.set(status, [...(byStatus.get(status) ?? []), code]);
     const shared = [...byStatus.entries()].filter(([, codes]) => codes.length > 1);
-    expect(shared).toEqual([[409, ["RUN_ACTIVE", "RUN_NOT_RETRYABLE"]]]);
+    expect(shared).toEqual([
+      [409, ["RUN_ACTIVE", "RUN_NOT_RETRYABLE"]],
+      [429, ["RATE_LIMITED", "UPLOAD_LIMIT_REACHED"]],
+    ]);
   });
 
   it("never uses 422, which the frontend reads as an answer it could not understand", () => {

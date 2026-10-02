@@ -14,6 +14,7 @@ import { messagesRouter } from "#src/routes/messages.js";
 import { runsRouter } from "#src/routes/runs.js";
 import { creditsRouter } from "#src/routes/credits.js";
 import { modelsRouter } from "#src/routes/models.js";
+import { uploadsRouter } from "#src/routes/uploads.js";
 import { healthRouter } from "#src/routes/health.js";
 
 export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number } = {}): Express {
@@ -46,6 +47,7 @@ export function createApp({ log = logger, rateLimits, sendLimit }: { log?: Logge
   app.use("/api", runsRouter(startsTurn));
   app.use("/api/credits", creditsRouter);
   app.use("/api/models", modelsRouter);
+  app.use("/api/uploads", uploadsRouter);
 
   app.use(notFound);
   app.use(errorHandler);

@@ -16,6 +16,12 @@ import {
   IsoDateTimeSchema,
   ModelsResponseSchema,
   ChatSearchQuerySchema,
+  CreateUploadsBodySchema,
+  UploadFileSchema,
+  MAX_ATTACHMENTS,
+  MAX_UPLOAD_BYTES,
+  MONTHLY_UPLOAD_BYTES,
+  UPLOAD_LIFETIME_MS,
   MessageListResponseSchema,
   MessageSchema,
   RunStatusSchema,
@@ -449,5 +455,30 @@ describe("ChatSearchQuerySchema", () => {
 
   it.each([{}, { q: "ab" }, { q: " ab " }, { q: "x".repeat(101) }, { q: "abc\u0000" }, { q: "abc", limit: 51 }, { q: "abc", limit: 0 }, { q: "abc", cursor: "" }])("rejects %j", (query) => {
     expect(ChatSearchQuerySchema.safeParse(query).success).toBe(false);
+  });
+});
+
+describe("uploads contract", () => {
+  it("states the limits the frontend checks against", () => {
+    expect({ MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, MONTHLY_UPLOAD_BYTES, UPLOAD_LIFETIME_MS }).toEqual({ MAX_ATTACHMENTS: 10, MAX_UPLOAD_BYTES: 500_000_000, MONTHLY_UPLOAD_BYTES: 5_000_000_000, UPLOAD_LIFETIME_MS: 23 * 3_600_000 });
+  });
+
+  it("normalises the type: case and parameters don't matter", () => {
+    expect(UploadFileSchema.parse({ name: "a.wav", size: 1, mimeType: " Audio/WAV; codecs=1 " }).mimeType).toBe("audio/wav");
+  });
+
+  it.each([
+    [{ name: "a.png", size: 1, mimeType: 42 }],
+    [{ name: "a.png", size: -1, mimeType: "image/png" }],
+    [{ name: "a.svg", size: 1, mimeType: "image/svg+xml" }],
+    [{ name: "a.png", size: 1, mimeType: "image/png", extra: true }],
+  ])("rejects %j", (file) => {
+    expect(UploadFileSchema.safeParse(file).success).toBe(false);
+  });
+
+  it("caps a request at the per-message limit", () => {
+    const file = { name: "a.png", size: 1, mimeType: "image/png" };
+    expect(CreateUploadsBodySchema.safeParse({ files: Array(MAX_ATTACHMENTS).fill(file) }).success).toBe(true);
+    expect(CreateUploadsBodySchema.safeParse({ files: Array(MAX_ATTACHMENTS + 1).fill(file) }).success).toBe(false);
   });
 });

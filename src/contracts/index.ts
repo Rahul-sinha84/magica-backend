@@ -6,3 +6,4 @@ export * from "./messages.js";
 export * from "./models.js";
 export * from "./runs.js";
 export * from "./tools.js";
+export * from "./uploads.js";

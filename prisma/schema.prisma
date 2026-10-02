@@ -1,4 +1,4 @@
-// Core tables. Attachment and Waitpoint arrive later as additive migrations.
+// Core tables. Waitpoint arrives later as an additive migration.
 // The pg_trgm extension (for the search indexes) is created by the chat_search migration.
 //
 // Constraints Prisma cannot express live as raw SQL at the end of the init migration:
@@ -29,6 +29,8 @@ model User {
   messages     Message[]
   agentRuns    AgentRun[]
   creditLedger CreditLedger[]
+  uploads      Upload[]
+  mediaAssets  MediaAsset[]
 }
 
 model Chat {
@@ -60,10 +62,11 @@ model Message {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  chat          Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  triggeredRuns AgentRun[] @relation("TriggerMessage")
-  assistantRun  AgentRun?  @relation("AssistantMessage")
+  chat          Chat         @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggeredRuns AgentRun[]   @relation("TriggerMessage")
+  assistantRun  AgentRun?    @relation("AssistantMessage")
+  attachments   Attachment[]
 
   @@unique([chatId, clientMessageId]) // NULLs are distinct, so only client-supplied keys collide
   @@index([chatId, createdAt(sort: Desc), id(sort: Desc)])
@@ -140,7 +143,8 @@ model ToolInvocation {
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
 
-  agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  agentRun    AgentRun     @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  mediaAssets MediaAsset[]
 
   @@unique([agentRunId, toolCallId])
 }
@@ -164,6 +168,90 @@ model CreditLedger {
 
   @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([agentRunId])
+}
+
+// A direct upload through Transloadit, one assembly per file. Created (PENDING) when the browser asks for a signed
+// upload; completed or failed once Transloadit reports back. The finished file becomes a MediaAsset.
+model Upload {
+  id           String       @id @default(cuid())
+  userId       String
+  assemblyId   String?      @unique // Transloadit's assembly id, known once the upload has finished
+  status       UploadStatus @default(PENDING)
+  originalName String // cleaned of control characters
+  mimeType     String // as declared when signing; Transloadit's detected type is checked on completion
+  sizeBytes    Int // as declared when signing; replaced by Transloadit's measured size on completion
+  errorMessage String? // user-safe
+  mediaAssetId String?      @unique
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaAsset MediaAsset? @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt(sort: Desc)])
+  @@index([createdAt]) // the monthly allowance adds up this month's uploads
+}
+
+// A file in the user's media library: one they uploaded (lives on Transloadit's temporary storage, so it expires) or
+// one the agent generated (lives on Magica's CDN, no expiry). Messages refer to these through Attachment.
+model MediaAsset {
+  id               String      @id @default(cuid())
+  userId           String
+  source           MediaSource
+  type             MediaType
+  url              String
+  expiresAt        DateTime? // uploads only; null for generated media
+  name             String? // the file name, for uploads
+  prompt           String? // what the agent was asked to make, for generated media
+  model            String? // the model that made it, for generated media
+  width            Int?
+  height           Int?
+  mimeType         String?
+  toolInvocationId String? // the tool call that generated it
+  createdAt        DateTime    @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  toolInvocation ToolInvocation? @relation(fields: [toolInvocationId], references: [id], onDelete: SetNull)
+  upload         Upload?
+  attachments    Attachment[]
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([userId, source, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([toolInvocationId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "MediaAsset_name_trgm_idx") // library search
+  @@index([prompt(ops: raw("gin_trgm_ops"))], type: Gin, map: "MediaAsset_prompt_trgm_idx") // library search
+}
+
+// A message's files, in the order they were attached (the order matters to the model).
+model Attachment {
+  id           String @id @default(cuid())
+  messageId    String
+  mediaAssetId String
+  position     Int // 0-based, the order shown and given to the model
+
+  message    Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  mediaAsset MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, position])
+  @@unique([messageId, mediaAssetId]) // the same file twice in one message is refused
+  @@index([mediaAssetId])
+}
+
+enum UploadStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum MediaSource {
+  UPLOAD
+  GENERATED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
 }
 
 enum MessageRole {
