@@ -17,6 +17,7 @@ import { modelsRouter } from "#src/routes/models.js";
 import { mediaRouter } from "#src/routes/media.js";
 import { uploadNotificationsRouter, uploadsRouter } from "#src/routes/uploads.js";
 import { waitpointsRouter } from "#src/routes/waitpoints.js";
+import { apiKeysRouter } from "#src/routes/apiKeys.js";
 import type { FetchAssembly } from "#src/lib/transloadit.js";
 import { healthRouter } from "#src/routes/health.js";
 
@@ -56,6 +57,7 @@ export function createApp({ log = logger, rateLimits, sendLimit, fetchAssembly }
   app.use("/api/uploads", uploadsRouter(fetchAssembly ? { fetchAssembly } : {}));
   app.use("/api/media", mediaRouter);
   app.use("/api/waitpoints", waitpointsRouter);
+  app.use("/api/api-keys", apiKeysRouter);
 
   app.use(notFound);
   app.use(errorHandler);

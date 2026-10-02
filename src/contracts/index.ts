@@ -9,3 +9,4 @@ export * from "./tools.js";
 export * from "./uploads.js";
 export * from "./media.js";
 export * from "./waitpoints.js";
+export * from "./apikeys.js";

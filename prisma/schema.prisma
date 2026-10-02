@@ -5,6 +5,8 @@
 //   - AgentRun_one_active_per_chat: partial unique index (one PENDING/RUNNING run per chat)
 //   - User_credits_valid: CHECK (balance >= 0 AND held >= 0 AND held <= balance)
 //   - CreditLedger_amount_nonzero: CHECK (amount <> 0)
+// and at the end of the api_keys migration:
+//   - ApiKey_limits_valid, ApiKey_label_valid, ApiKey_hash_hex, ApiKey_prefix_valid: CHECKs
 // and at the end of the waitpoints migration:
 //   - Waitpoint_one_pending_per_run: partial unique index (one PENDING waitpoint per run)
 //   - Waitpoint_resolved_when_closed, Waitpoint_response_when_answered, Waitpoint_expires_after_creation: CHECKs
@@ -34,6 +36,7 @@ model User {
   creditLedger CreditLedger[]
   uploads      Upload[]
   mediaAssets  MediaAsset[]
+  apiKeys      ApiKey[]
 }
 
 model Chat {
@@ -173,6 +176,28 @@ model Waitpoint {
   agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
 
   @@index([agentRunId, createdAt])
+}
+
+// A key for the public API (/v1). Only its SHA-256 hash is stored: the key itself is shown once, when it is created.
+// `prefix` (the first characters) lets the user tell their keys apart. Revoking is final; an expired or revoked key
+// no longer works and doesn't count toward the 10 active keys a user may have.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  label      String
+  prefix     String // "mgc_" and the next 8 characters of the key
+  hash       String    @unique // sha256 of the whole key, lowercase hex
+  perMinute  Int       @default(60)
+  perDay     Int       @default(1000)
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 // Signed amount, from the point of view of the counter it changes:

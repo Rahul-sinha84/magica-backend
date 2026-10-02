@@ -24,14 +24,15 @@ describe("ERROR_STATUS", () => {
     expect(Object.keys(ERROR_STATUS).sort()).toEqual([...ErrorCodeSchema.options].sort());
   });
 
-  // shared on purpose, and only these: the two conflicts, and the two "too much" answers (a short burst vs. the
-  // month's upload allowance); clients tell each pair apart by code, and neither 429 is retried automatically
+  // shared on purpose, and only these: the conflicts (a run in flight, a turn that can't be retried, the API key cap),
+  // and the two "too much" answers (a short burst vs. the month's upload allowance); clients tell them apart by code,
+  // and neither 429 is retried automatically
   it("gives every code its own status, except the pairs clients tell apart by code", () => {
     const byStatus = new Map<number, string[]>();
     for (const [code, status] of Object.entries(ERROR_STATUS)) byStatus.set(status, [...(byStatus.get(status) ?? []), code]);
     const shared = [...byStatus.entries()].filter(([, codes]) => codes.length > 1);
     expect(shared).toEqual([
-      [409, ["RUN_ACTIVE", "RUN_NOT_RETRYABLE"]],
+      [409, ["RUN_ACTIVE", "RUN_NOT_RETRYABLE", "API_KEY_LIMIT_REACHED"]],
       [429, ["RATE_LIMITED", "UPLOAD_LIMIT_REACHED"]],
     ]);
   });
