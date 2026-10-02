@@ -414,12 +414,19 @@ describe("ModelsResponseSchema", () => {
   const body = {
     models: [{ id: "openrouter/free", name: "OpenRouter Free", provider: "openrouter", free: true, isDefault: true }],
     defaultModelId: "openrouter/free",
-    status: { health: "available", lastRoutedModel: "meta/free-7b", checkedAt: "2026-10-01T10:00:00.000Z" },
+    status: { health: "available", lastRoutedModel: "meta/free-7b", reason: null, checkedAt: "2026-10-01T10:00:00.000Z" },
   };
 
   it("parses the model list with its health", () => {
     expect(ModelsResponseSchema.safeParse(body).success).toBe(true);
     expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, lastRoutedModel: null } }).success).toBe(true);
+  });
+
+  it("carries a reason (null when there is nothing specific to say), always present", () => {
+    const limited = { ...body.status, health: "unavailable", reason: "The free model's daily limit is reached. It resets at 00:00 UTC." };
+    expect(ModelsResponseSchema.safeParse({ ...body, status: limited }).success).toBe(true);
+    const { reason: _reason, ...withoutReason } = body.status;
+    expect(ModelsResponseSchema.safeParse({ ...body, status: withoutReason }).success).toBe(false);
   });
 
   it.each(["available", "degraded", "unavailable", "unknown"])("accepts health %j", (health) => {

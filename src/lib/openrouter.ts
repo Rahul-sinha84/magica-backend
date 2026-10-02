@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { env } from "#src/env/worker.js";
+import { FAILURE_INFO, type ModelFailure } from "#src/lib/modelFailures.js";
 import { wellFormed } from "#src/lib/text.js";
 
 /** A tool call as the model asked for it, in the shape it is sent back to the model with its result. */
@@ -109,18 +110,7 @@ export function assembleToolCalls(parts: Map<number, PartialToolCall>, makeId: (
     });
 }
 
-/** Why the model could not answer, in terms of what the user can do about it. */
-export type ModelFailure = "RATE_LIMITED" | "UNAVAILABLE" | "EMPTY" | "INTERRUPTED" | "REJECTED" | "CONFIG";
-
-// Stable codes for the run row, and wording that is safe to show to the user (nothing about providers or keys).
-export const FAILURE_INFO: Readonly<Record<ModelFailure, { code: string; message: string }>> = {
-  RATE_LIMITED: { code: "MODEL_RATE_LIMITED", message: "The free model is busy right now. Please try again in a moment." },
-  UNAVAILABLE: { code: "MODEL_UNAVAILABLE", message: "The assistant is unavailable right now. Please try again shortly." },
-  EMPTY: { code: "MODEL_EMPTY", message: "The assistant didn't return an answer. Please try again." },
-  INTERRUPTED: { code: "MODEL_INTERRUPTED", message: "The response was interrupted. What was written so far is kept." },
-  REJECTED: { code: "MODEL_REJECTED", message: "The assistant couldn't process this conversation." },
-  CONFIG: { code: "MODEL_CONFIG", message: "The assistant isn't available right now." },
-};
+export { FAILURE_INFO, type ModelFailure };
 
 export class ModelError extends Error {
   constructor(
@@ -208,7 +198,13 @@ interface ChunkExtras {
   }[];
 }
 
-function fromStatus(status: number, retryAfterMs: number | undefined, detail: string): ModelError {
+// The free route's per-account daily allowance. Unlike a busy model it doesn't clear in seconds (it resets at 00:00 UTC),
+// so trying again only spends more of the attempts; it is recognised by the reason OpenRouter gives.
+const DAILY_LIMIT_SOURCE = "openrouter_free_tier_daily";
+const isDailyLimit = (message: string | undefined, limitSource: unknown) => limitSource === DAILY_LIMIT_SOURCE || !!message?.includes("free-models-per-day");
+
+function fromStatus(status: number, retryAfterMs: number | undefined, detail: string, dailyLimit = false): ModelError {
+  if (status === 429 && dailyLimit) return new ModelError("DAILY_LIMIT", detail, false);
   if (status === 429) return new ModelError("RATE_LIMITED", detail, true, retryAfterMs);
   if (status === 408 || status === 425 || status >= 500) return new ModelError("UNAVAILABLE", detail, true, retryAfterMs);
   if (status === 401 || status === 402 || status === 403) return new ModelError("CONFIG", detail, false);
@@ -225,9 +221,15 @@ function headerOf(headers: unknown, name: string): string | null {
 function classify(error: unknown, options: { maxDelayMs: number; signal?: AbortSignal; afterOutput: boolean }): unknown {
   if (error instanceof ModelError) return error;
   if (options.signal?.aborted) return error;
-  if (error instanceof OpenAI.APIError && typeof error.status === "number") {
-    const retryAfter = parseRetryAfter(headerOf(error.headers, "retry-after"), options.maxDelayMs);
-    return fromStatus(error.status, retryAfter, `${error.status}: ${error.message}`);
+  if (error instanceof OpenAI.APIError) {
+    const body = error.error as { message?: unknown; metadata?: { limit_source?: unknown } } | undefined;
+    const dailyLimit = isDailyLimit(typeof body?.message === "string" ? body.message : error.message, body?.metadata?.limit_source);
+    if (typeof error.status === "number") {
+      const retryAfter = parseRetryAfter(headerOf(error.headers, "retry-after"), options.maxDelayMs);
+      return fromStatus(error.status, retryAfter, `${error.status}: ${error.message}`, dailyLimit);
+    }
+    // an error reported inside the stream comes with no HTTP status; of those, only the daily limit won't clear by retrying
+    if (dailyLimit) return new ModelError("DAILY_LIMIT", error.message, false);
   }
   // connection trouble, a stalled stream, or something the SDK could not parse: worth another try if nothing was sent
   return new ModelError("UNAVAILABLE", error instanceof Error ? error.message : String(error), true);
@@ -236,7 +238,9 @@ function classify(error: unknown, options: { maxDelayMs: number; signal?: AbortS
 /** Error payloads can arrive inside the stream itself (a provider failing part-way through). */
 function fromStreamError(error: NonNullable<ChunkExtras["error"]>): ModelError {
   const status = typeof error.code === "number" ? error.code : Number(error.code);
-  return Number.isFinite(status) ? fromStatus(status, undefined, `${status}: ${error.message ?? "stream error"}`) : new ModelError("UNAVAILABLE", error.message ?? "stream error", true);
+  return Number.isFinite(status)
+    ? fromStatus(status, undefined, `${status}: ${error.message ?? "stream error"}`, isDailyLimit(error.message, undefined))
+    : new ModelError("UNAVAILABLE", error.message ?? "stream error", true);
 }
 
 export type ModelStream = (messages: ChatMessage[], signal?: AbortSignal, options?: StreamCallOptions) => AsyncGenerator<ModelEvent>;

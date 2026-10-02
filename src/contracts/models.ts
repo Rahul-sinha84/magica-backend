@@ -26,6 +26,8 @@ export const ModelsResponseSchema = z.object({
     health: ModelHealthSchema,
     // the free router picks a real model per request; this is the one that answered the latest turn
     lastRoutedModel: z.string().nullable(),
+    // why it is unavailable, when there is something specific to say (e.g. the free daily limit is used up); safe to show
+    reason: z.string().nullable(),
     checkedAt: IsoDateTimeSchema,
   }),
 });

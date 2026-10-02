@@ -53,6 +53,16 @@ describe("GET /api/models", () => {
     expect((await models()).status).toMatchObject({ health: "unavailable", lastRoutedModel: "meta/free-7b" });
   });
 
+  it("says the free daily limit is used up, and when it resets, until a turn answers again", async () => {
+    await ended("COMPLETED", { model: "meta/free-7b", agoMs: 60_000 });
+    await ended("FAILED", { errorCode: "MODEL_DAILY_LIMIT", agoMs: Math.min(10_000, Date.now() % 86_400_000) }); // today, even just after 00:00 UTC
+    expect((await models()).status).toMatchObject({ health: "unavailable", lastRoutedModel: "meta/free-7b", reason: "The free model's daily limit is reached. It resets at 00:00 UTC." });
+
+    resetModelsCache();
+    await ended("COMPLETED", { model: "meta/free-7b", agoMs: 1_000 });
+    expect((await models()).status).toMatchObject({ health: "degraded", reason: null });
+  });
+
   it("ignores turns that ended too long ago, cancelled turns, and failures that are not the model's", async () => {
     await ended("FAILED", { errorCode: "MODEL_RATE_LIMITED", agoMs: HEALTH_WINDOW_MS + 60_000 });
     await ended("CANCELLED");

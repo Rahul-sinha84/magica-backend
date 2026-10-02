@@ -368,6 +368,7 @@ describe("when the model cannot answer", () => {
 
   it.each([
     ["RATE_LIMITED", "MODEL_RATE_LIMITED"],
+    ["DAILY_LIMIT", "MODEL_DAILY_LIMIT"],
     ["UNAVAILABLE", "MODEL_UNAVAILABLE"],
     ["EMPTY", "MODEL_EMPTY"],
     ["REJECTED", "MODEL_REJECTED"],
@@ -377,6 +378,12 @@ describe("when the model cannot answer", () => {
     const { turn, payload } = await setupTurn();
     await run(payload, [{ fail: new ModelError(failure, "detail", false) }]);
     expect((await runRow(turn.run.id)).errorCode).toBe(code);
+  });
+
+  it("tells the user when the free daily limit resets", async () => {
+    const { turn, payload } = await setupTurn();
+    await run(payload, [{ fail: new ModelError("DAILY_LIMIT", "429: Rate limit exceeded: free-models-per-day", false) }]);
+    expect(await runRow(turn.run.id)).toMatchObject({ status: "FAILED", errorCode: "MODEL_DAILY_LIMIT", errorMessage: "The free model's daily limit is reached. It resets at 00:00 UTC." });
   });
 
   it("does not fail a turn that was already ended elsewhere (and does not release credits twice)", async () => {

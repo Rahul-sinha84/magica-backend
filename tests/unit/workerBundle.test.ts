@@ -25,3 +25,28 @@ describe("the agent task's bundle", () => {
     expect(inputs.filter((file) => /node_modules\/(express|@clerk)/.test(file))).toEqual([]);
   });
 });
+
+// The other direction: the API server runs without the worker's settings (OpenRouter and Magica keys), and reading the
+// worker's environment at import time would stop it from starting. Shared pieces must live in env-free modules.
+describe("the API server's bundle", () => {
+  it("contains nothing that belongs to the worker", async () => {
+    const result = await build({
+      entryPoints: ["src/server.ts"],
+      bundle: true,
+      write: false,
+      metafile: true,
+      platform: "node",
+      format: "esm",
+      logLevel: "silent",
+      conditions: ["magica-source"],
+      packages: "external",
+    });
+    const inputs = Object.keys(result.metafile.inputs);
+    expect(inputs.some((file) => file.endsWith("src/env/server.ts"))).toBe(true);
+
+    const forbidden = ["src/env/worker.ts", "src/lib/openrouter.ts", "src/lib/magica.ts", "src/agent/runTurn.ts", "src/trigger/", "src/skills/"];
+    for (const part of forbidden) expect(inputs.filter((file) => file.includes(part)), part).toEqual([]);
+    const packages = Object.values(result.metafile.outputs).flatMap((output) => output.imports.map((entry) => entry.path));
+    expect(packages).not.toContain("openai");
+  });
+});
