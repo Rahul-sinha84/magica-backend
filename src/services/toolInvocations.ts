@@ -25,7 +25,8 @@ export class InsufficientCreditsForTool extends AppError {
 }
 
 export interface NewInvocation {
-  agentRunId: string;
+  /** the run that made the call; null for a standalone run through the public API */
+  agentRunId: string | null;
   userId: string;
   toolCallId: string;
   toolName: string;
@@ -37,19 +38,21 @@ export interface NewInvocation {
 
 /**
  * Records a tool call and reserves its credits, together. The same (run, tool call) gives back the same invocation,
- * so asking twice never reserves twice. Short of credits: nothing is written and InsufficientCreditsForTool is thrown.
+ * so asking twice never reserves twice (a standalone run has no run: its repeats are caught by the public API's
+ * Idempotency-Key instead). Short of credits: nothing is written and InsufficientCreditsForTool is thrown.
  */
 export async function createInvocation(call: NewInvocation, db: typeof prisma = prisma) {
-  const existing = await db.toolInvocation.findUnique({ where: { agentRunId_toolCallId: { agentRunId: call.agentRunId, toolCallId: call.toolCallId } } });
+  const same = call.agentRunId === null ? null : { agentRunId_toolCallId: { agentRunId: call.agentRunId, toolCallId: call.toolCallId } };
+  const existing = same && (await db.toolInvocation.findUnique({ where: same }));
   if (existing) return existing;
   try {
     return await db.$transaction(async (tx) => {
       const invocation = await tx.toolInvocation.create({
-        data: { agentRunId: call.agentRunId, toolCallId: call.toolCallId, toolName: call.toolName, input: toJson(call.input), status: "PENDING" },
+        data: { userId: call.userId, agentRunId: call.agentRunId, toolCallId: call.toolCallId, toolName: call.toolName, input: toJson(call.input), status: "PENDING" },
       });
       if (call.creditCost > 0) {
         try {
-          await hold(tx, { userId: call.userId, amount: call.creditCost, reason: `tool ${call.toolName}`, idempotencyKey: toolHoldKey(invocation.id), agentRunId: call.agentRunId });
+          await hold(tx, { userId: call.userId, amount: call.creditCost, reason: `tool ${call.toolName}`, idempotencyKey: toolHoldKey(invocation.id), ...(call.agentRunId && { agentRunId: call.agentRunId }) });
         } catch (error) {
           if (error instanceof AppError && error.code === "INSUFFICIENT_CREDITS") throw new InsufficientCreditsForTool();
           throw error;
@@ -59,8 +62,8 @@ export async function createInvocation(call: NewInvocation, db: typeof prisma = 
     });
   } catch (error) {
     // the same call recorded at the same moment by a twin request: answer with that one
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return db.toolInvocation.findUniqueOrThrow({ where: { agentRunId_toolCallId: { agentRunId: call.agentRunId, toolCallId: call.toolCallId } } });
+    if (same && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return db.toolInvocation.findUniqueOrThrow({ where: same });
     }
     throw error;
   }

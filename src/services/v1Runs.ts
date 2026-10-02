@@ -1,6 +1,6 @@
-import { blocksToText, ContentBlocksSchema, V1RunSchema, type ContentBlock, type V1Run, type V1RunStatus } from "#src/contracts/index.js";
+import { blocksToText, ContentBlocksSchema, V1RunSchema, V1ToolCallSchema, type ContentBlock, type V1Run, type V1RunStatus, type V1ToolCall } from "#src/contracts/index.js";
 import { prisma } from "#src/db/client.js";
-import type { MediaAsset as MediaAssetRow } from "#src/generated/prisma/client.js";
+import type { MediaAsset as MediaAssetRow, ToolInvocation as ToolInvocationRow } from "#src/generated/prisma/client.js";
 import { AppError } from "#src/lib/errors.js";
 import { cancelTriggerRun } from "#src/lib/trigger.js";
 import { reconcileRun } from "#src/services/reconcile.js";
@@ -41,6 +41,22 @@ const libraryAsset = (row: MediaAssetRow) => ({
   height: row.height,
 });
 
+/** A paid tool call as the public API shows it (in a run, or a standalone run): never Magica's run id or its cost. */
+export function toolCallView(call: ToolInvocationRow & { mediaAssets: MediaAssetRow[] }): V1ToolCall {
+  return V1ToolCallSchema.parse({
+    id: call.id,
+    tool: call.toolName,
+    status: call.status === "DISPATCHING" ? "running" : call.status.toLowerCase(),
+    input: sanitizeInput(call.input),
+    credits: call.creditCost,
+    durationMs: call.durationMs,
+    assets: call.mediaAssets.map(libraryAsset),
+    error: call.errorMessage,
+    createdAt: call.createdAt.toISOString(),
+    completedAt: call.completedAt?.toISOString() ?? null,
+  });
+}
+
 function statusOf(run: Loaded): V1RunStatus {
   switch (run.status) {
     case "PENDING":
@@ -76,18 +92,7 @@ function view(run: Loaded): V1Run {
       text: blocksToText(blocks),
       assets: blocks.flatMap((block) => (block.type === "image" || block.type === "video" || block.type === "audio" ? [assetOf(block)] : [])),
     },
-    toolCalls: run.toolInvocations.map((call) => ({
-      id: call.id,
-      tool: call.toolName,
-      status: call.status === "DISPATCHING" ? "running" : call.status.toLowerCase(),
-      input: sanitizeInput(call.input) as Record<string, unknown>,
-      credits: call.creditCost,
-      durationMs: call.durationMs,
-      assets: call.mediaAssets.map(libraryAsset),
-      error: call.errorMessage,
-      createdAt: call.createdAt.toISOString(),
-      completedAt: call.completedAt?.toISOString() ?? null,
-    })),
+    toolCalls: run.toolInvocations.map(toolCallView),
     pendingWaitpoint: pending ? serializeWaitpoint(pending) : null,
     createdAt: run.createdAt.toISOString(),
     startedAt: run.startedAt?.toISOString() ?? null,

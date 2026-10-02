@@ -22,8 +22,14 @@ import { v1Router } from "#src/routes/v1.js";
 import type { FetchAssembly } from "#src/lib/transloadit.js";
 import { healthRouter } from "#src/routes/health.js";
 
-// `fetchAssembly` (how Transloadit is asked about an upload) is only replaced in tests.
-export function createApp({ log = logger, rateLimits, sendLimit, fetchAssembly }: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number; fetchAssembly?: FetchAssembly } = {}): Express {
+// `fetchAssembly` (how Transloadit is asked about an upload) and `completionWaitMs` are only replaced in tests.
+export function createApp({
+  log = logger,
+  rateLimits,
+  sendLimit,
+  fetchAssembly,
+  completionWaitMs,
+}: { log?: Logger; rateLimits?: ApiLimits; sendLimit?: number; fetchAssembly?: FetchAssembly; completionWaitMs?: number } = {}): Express {
   const app = express();
   app.set("trust proxy", env.TRUST_PROXY);
 
@@ -60,7 +66,7 @@ export function createApp({ log = logger, rateLimits, sendLimit, fetchAssembly }
   app.use("/api/waitpoints", waitpointsRouter);
   app.use("/api/api-keys", apiKeysRouter);
   // the public API: its own way in (API keys or a session token), its own limits, errors that carry the trace id
-  app.use("/v1", v1Router({ sessionAuth: clerkAuth(), sendLimit: startsTurn }));
+  app.use("/v1", v1Router({ sessionAuth: clerkAuth(), sendLimit: startsTurn, ...(completionWaitMs !== undefined && { completionWaitMs }) }));
 
   app.use(notFound);
   app.use(errorHandler);

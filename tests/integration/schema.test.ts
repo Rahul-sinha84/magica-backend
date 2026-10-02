@@ -151,7 +151,7 @@ describe("run bookkeeping", () => {
   it("rejects a tool call recorded twice for one run", async () => {
     const user = await fixtures.user();
     const run = await fixtures.run((await fixtures.chat(user.id)).id, user.id);
-    const tool = { agentRunId: run.id, toolCallId: "call_1", toolName: "crop_image", input: {} };
+    const tool = { userId: user.id, agentRunId: run.id, toolCallId: "call_1", toolName: "crop_image", input: {} };
     await prisma.toolInvocation.create({ data: tool });
     expect(await failure(prisma.toolInvocation.create({ data: tool }))).toBe("P2002");
   });
@@ -162,7 +162,7 @@ describe("cascades and foreign keys", () => {
     const user = await fixtures.user();
     const chat = await fixtures.chat(user.id);
     const run = await fixtures.run(chat.id, user.id, "RUNNING");
-    await prisma.toolInvocation.create({ data: { agentRunId: run.id, toolCallId: "c", toolName: "t", input: {} } });
+    await prisma.toolInvocation.create({ data: { userId: user.id, agentRunId: run.id, toolCallId: "c", toolName: "t", input: {} } });
     const entry = await ledger(user.id, { agentRunId: run.id, type: "HOLD" });
 
     await prisma.chat.delete({ where: { id: chat.id } });

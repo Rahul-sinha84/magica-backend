@@ -11,11 +11,14 @@ export const AGENT_QUEUE_TTL_SECONDS = 600;
 /** The child task that runs one Magica tool call durably. */
 export const MAGICA_TOOL_TASK_ID = "magica-tool";
 
-/** What the Magica tool task receives: the recorded tool call (its input and credits are already in the database). */
+/**
+ * What the Magica tool task receives: the recorded tool call (its input and credits are already in the database). A
+ * standalone run through the public API has no agent run or chat.
+ */
 export interface MagicaToolPayload {
   invocationId: string;
-  agentRunId: string;
-  chatId: string;
+  agentRunId?: string;
+  chatId?: string;
   userId: string;
   traceId: string;
 }

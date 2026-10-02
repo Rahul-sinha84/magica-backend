@@ -247,7 +247,7 @@ describe("GET /v1/runs/:runId", () => {
     const { run, assistantMessage } = await aRun();
     await prisma.message.update({ where: { id: assistantMessage.id }, data: { contentBlocks: [{ type: "text", content: "Working on " }, { type: "text", content: "it" }] as never } });
     const invocation = await prisma.toolInvocation.create({
-      data: { agentRunId: run.id, toolCallId: "s1-a", toolName: "gpt_image_2", input: { prompt: "A fox", api_key: "hidden" }, status: "RUNNING", magicaRunId: "mg_secret_run", providerCost: 7644 },
+      data: { userId: "u1", agentRunId: run.id, toolCallId: "s1-a", toolName: "gpt_image_2", input: { prompt: "A fox", api_key: "hidden" }, status: "RUNNING", magicaRunId: "mg_secret_run", providerCost: 7644 },
     });
     const res = await withKey(secret).get(`/v1/runs/${run.id}`);
     expect(res.status).toBe(200);
@@ -262,7 +262,7 @@ describe("GET /v1/runs/:runId", () => {
     const { secret } = await keyFor("u1");
     const { run, assistantMessage } = await aRun();
     const invocation = await prisma.toolInvocation.create({
-      data: { agentRunId: run.id, toolCallId: "s1-a", toolName: "gpt_image_2", input: { prompt: "A fox" }, status: "COMPLETED", creditCost: 1_000_000, durationMs: 31_000, completedAt: new Date() },
+      data: { userId: "u1", agentRunId: run.id, toolCallId: "s1-a", toolName: "gpt_image_2", input: { prompt: "A fox" }, status: "COMPLETED", creditCost: 1_000_000, durationMs: 31_000, completedAt: new Date() },
     });
     await prisma.mediaAsset.create({ data: { userId: "u1", source: "GENERATED", type: "IMAGE", url: "https://g.tlcdn.com/gen/fox.png", toolInvocationId: invocation.id, width: 1024, height: 1024, mimeType: "image/png" } });
     const blocks = [{ type: "text", content: "Here is your fox." }, { type: "image", url: "https://g.tlcdn.com/gen/fox.png", mimeType: "image/png", width: 1024, height: 1024 }];

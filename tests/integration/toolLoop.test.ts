@@ -435,7 +435,7 @@ describe("the stale-run rule with tools", () => {
     const user = await fixtures.user({ id: "u1" });
     const chat = await fixtures.chat(user.id);
     const turn = await activeTurn(chat.id, user.id, { status: "RUNNING", triggerRunId: "run_long", ageMs: MAX_RUN_MS + 60_000, quietMs: 60_000, startedAt: new Date(Date.now() - MAX_RUN_MS - 60_000) });
-    await prisma.toolInvocation.create({ data: { agentRunId: turn.run.id, toolCallId: "s1-x", toolName: "gpt_image_2", input: {}, status: "RUNNING", dispatchedAt: new Date(Date.now() - dispatchedAgoMs), magicaRunId: "mg" } });
+    await prisma.toolInvocation.create({ data: { userId: user.id, agentRunId: turn.run.id, toolCallId: "s1-x", toolName: "gpt_image_2", input: {}, status: "RUNNING", dispatchedAt: new Date(Date.now() - dispatchedAgoMs), magicaRunId: "mg" } });
     return turn;
   }
 

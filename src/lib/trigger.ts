@@ -1,5 +1,5 @@
 import { auth, configure, runs, tasks, wait } from "@trigger.dev/sdk";
-import { AGENT_QUEUE_TTL_SECONDS, AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
+import { AGENT_QUEUE_TTL_SECONDS, AGENT_TASK_ID, MAGICA_TOOL_TASK_ID, type AgentTurnPayload, type MagicaToolPayload } from "#src/agent/payload.js";
 import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
 
@@ -34,6 +34,18 @@ export async function dispatchAgentTurn(payload: AgentTurnPayload, idempotencyKe
     ttl: AGENT_QUEUE_TTL_SECONDS, // a turn nobody starts in time is dropped by Trigger.dev and reported as EXPIRED
     tags: [`chat_${payload.chatId}`, `user_${payload.userId}`],
   });
+  return handle.id;
+}
+
+/**
+ * Starts a standalone Magica tool run (the public API's /v1/tools) and returns its Trigger.dev run id. The same key
+ * always maps to the same run. Dropped by Trigger.dev if nobody starts it within the agent's queue TTL.
+ */
+export async function dispatchToolRun(payload: MagicaToolPayload, idempotencyKey: string): Promise<string> {
+  const handle = await withTimeout(
+    tasks.trigger(MAGICA_TOOL_TASK_ID, payload, { idempotencyKey, ttl: AGENT_QUEUE_TTL_SECONDS, tags: [`user_${payload.userId}`, "standalone"] }),
+    "starting the tool run",
+  );
   return handle.id;
 }
 

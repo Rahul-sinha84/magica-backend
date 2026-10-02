@@ -37,7 +37,8 @@
     "smoke": "bash scripts/smoke.sh",
     "skills:check": "tsx --conditions=magica-source scripts/skills-check.ts",
     "magica:try": "tsx --conditions=magica-source --env-file-if-exists=.env.local scripts/magica-try.ts",
-    "media:backfill": "tsx --conditions=magica-source --env-file-if-exists=.env.local scripts/media-backfill.ts"
+    "media:backfill": "tsx --conditions=magica-source --env-file-if-exists=.env.local scripts/media-backfill.ts",
+    "openapi": "tsx --conditions=magica-source scripts/openapi.ts"
   },
   "dependencies": {
     "@clerk/backend": "3.20.1",

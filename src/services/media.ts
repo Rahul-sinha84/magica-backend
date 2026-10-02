@@ -52,10 +52,10 @@ export async function addGeneratedMedia(tx: Tx, toolInvocationId: string, assets
     return url ? [{ ...asset, url }] : [];
   });
   if (usable.length === 0) return 0;
-  const invocation = await tx.toolInvocation.findUniqueOrThrow({ where: { id: toolInvocationId }, select: { completedAt: true, agentRun: { select: { userId: true } } } });
+  const invocation = await tx.toolInvocation.findUniqueOrThrow({ where: { id: toolInvocationId }, select: { completedAt: true, userId: true } });
   const { count } = await tx.mediaAsset.createMany({
     data: usable.map((asset) => ({
-      userId: invocation.agentRun.userId,
+      userId: invocation.userId,
       source: "GENERATED" as const,
       type: MEDIA_TYPE[asset.type],
       url: asset.url,

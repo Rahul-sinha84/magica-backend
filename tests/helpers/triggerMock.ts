@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
-import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
+import { AGENT_TASK_ID, type AgentTurnPayload, type MagicaToolPayload } from "#src/agent/payload.js";
 
 // Stands in for src/lib/trigger.ts. It behaves like Trigger.dev where it matters: the same idempotency key always
 // gives the same run, and it can be told to fail, hang, or accept a run and then report an error.
@@ -24,6 +24,8 @@ export const trigger = {
   onTokenCompleted: null as ((tokenId: string, output: Record<string, unknown>) => void) | null,
   /** While set, completing a token waits for it: holds an answer mid-way, to race another against it. */
   completeTokenGate: null as Promise<void> | null,
+  toolDispatches: [] as { payload: MagicaToolPayload; key: string; triggerRunId: string }[],
+  toolDispatchError: null as Error | null,
 };
 
 export function resetTriggerMock() {
@@ -41,6 +43,8 @@ export function resetTriggerMock() {
   trigger.completeTokenError = null;
   trigger.onTokenCompleted = null;
   trigger.completeTokenGate = null;
+  trigger.toolDispatches.length = 0;
+  trigger.toolDispatchError = null;
 }
 
 export const triggerModule = {
@@ -56,6 +60,17 @@ export const triggerModule = {
     trigger.dispatches.push({ payload, key, triggerRunId });
     if (trigger.dispatchError) throw trigger.dispatchError;
     return triggerRunId;
+  }),
+
+  /** standalone tool runs started through the public API, in order */
+  dispatchToolRun: vi.fn((payload: MagicaToolPayload, key: string): Promise<string> => {
+    if (trigger.toolDispatchError) return Promise.reject(trigger.toolDispatchError);
+    const existing = trigger.runsByKey.get(key);
+    if (existing) return Promise.resolve(existing);
+    const triggerRunId = `run_${randomUUID().slice(0, 12)}`;
+    trigger.runsByKey.set(key, triggerRunId);
+    trigger.toolDispatches.push({ payload, key, triggerRunId });
+    return Promise.resolve(triggerRunId);
   }),
 
   cancelTriggerRun: vi.fn((triggerRunId: string): Promise<void> => {

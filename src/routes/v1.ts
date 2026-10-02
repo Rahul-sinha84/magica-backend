@@ -16,9 +16,12 @@ import {
   MessageListResponseSchema,
   RespondWaitpointBodySchema,
   RespondWaitpointResponseSchema,
+  V1ChatCompletionBodySchema,
   V1MessageAcceptedSchema,
   V1RunResponseSchema,
   V1SendMessageBodySchema,
+  V1ToolRunResponseSchema,
+  V1_TOOL_PATHS,
 } from "#src/contracts/index.js";
 import { prisma } from "#src/db/client.js";
 import { AppError, toErrorResponse } from "#src/lib/errors.js";
@@ -33,6 +36,8 @@ import { parseIdempotencyKey, withIdempotency } from "#src/services/idempotency.
 import { listMedia } from "#src/services/media.js";
 import { listMessages } from "#src/services/messages.js";
 import { sendMessage } from "#src/services/turns.js";
+import { createCompletion } from "#src/services/completions.js";
+import { getToolRun, startToolRun } from "#src/services/toolRuns.js";
 import { cancelV1Run, getV1Run } from "#src/services/v1Runs.js";
 import { respondToWaitpoint } from "#src/services/waitpoints.js";
 
@@ -65,9 +70,12 @@ export interface V1Options {
   sessionAuth: RequestHandler;
   /** the app's limiter for starting turns, shared so the public API can't double anyone's allowance */
   sendLimit: RequestHandler;
+  /** how long /chat/completions waits for the answer before answering 202 (shorter in tests) */
+  completionWaitMs?: number;
 }
 
-export function v1Router({ sessionAuth, sendLimit }: V1Options): Router {
+export function v1Router(options: V1Options): Router {
+  const { sessionAuth, sendLimit } = options;
   const router = Router();
   const counters = new WindowCounters();
 
@@ -156,6 +164,44 @@ export function v1Router({ sessionAuth, sendLimit }: V1Options): Router {
     res.status(result.status).json(result.body);
   });
 
+  const runId = (raw: string) => {
+    const id = IdSchema.safeParse(raw);
+    if (!id.success) throw new AppError("NOT_FOUND", "That run isn't there.");
+    addLogContext({ runId: id.data });
+    return id.data;
+  };
+
+  // Runs one Magica tool directly (no chat). The body is the tool's input; poll GET /v1/tools/runs/{runId}.
+  router.post("/tools/:tool", sendLimit, async (req, res) => {
+    const path = String(req.params.tool);
+    // own keys only: "constructor" and the like are not tools
+    const tool = Object.hasOwn(V1_TOOL_PATHS, path) ? V1_TOOL_PATHS[path as keyof typeof V1_TOOL_PATHS] : undefined;
+    if (!tool) throw new AppError("NOT_FOUND", `There is no tool "${path.slice(0, 64)}". Use ${Object.keys(V1_TOOL_PATHS).join(", ")}.`);
+    const userId = currentUserId(res);
+    const key = parseIdempotencyKey(req.get("idempotency-key"));
+    const result = await withIdempotency({ userId, scope: `POST /v1/tools/${path}`, key, body: req.body }, () => startToolRun(userId, tool, req.body, traceIdOf()));
+    res.setHeader("idempotent-replayed", String(result.replayed));
+    res.status(result.status).json(result.body);
+  });
+
+  router.get("/tools/runs/:runId", async (req, res) => {
+    res.json(V1ToolRunResponseSchema.parse({ run: await getToolRun(currentUserId(res), runId(req.params.runId)) }));
+  });
+
+  // The chat-completions format, answered by the agent: 200 with the answer, or 202 with the run if it takes longer.
+  router.post("/chat/completions", sendLimit, async (req, res) => {
+    const body = V1ChatCompletionBodySchema.parse(req.body);
+    const userId = currentUserId(res);
+    const key = parseIdempotencyKey(req.get("idempotency-key"));
+    const gone = new AbortController(); // the caller hung up: stop waiting (the run carries on)
+    res.on("close", () => gone.abort());
+    const result = await withIdempotency({ userId, scope: "POST /v1/chat/completions", key, body }, () =>
+      createCompletion(userId, body, { traceId: traceIdOf(), signal: gone.signal, ...(options.completionWaitMs !== undefined && { waitMs: options.completionWaitMs }) }),
+    );
+    res.setHeader("idempotent-replayed", String(result.replayed));
+    res.status(result.status).json(result.body);
+  });
+
   router.get("/chats", async (req, res) => {
     res.json(ChatListResponseSchema.parse(await listChats(currentUserId(res), ChatListQuerySchema.parse(req.query))));
   });
@@ -164,13 +210,6 @@ export function v1Router({ sessionAuth, sendLimit }: V1Options): Router {
     const query = MessageListQuerySchema.parse(req.query);
     res.json(MessageListResponseSchema.parse(await listMessages(currentUserId(res), parseChatId(req.params.chatId), query)));
   });
-
-  const runId = (raw: string) => {
-    const id = IdSchema.safeParse(raw);
-    if (!id.success) throw new AppError("NOT_FOUND", "That run isn't there.");
-    addLogContext({ runId: id.data });
-    return id.data;
-  };
 
   router.get("/runs/:runId", async (req, res) => {
     res.json(V1RunResponseSchema.parse({ run: await getV1Run(currentUserId(res), runId(req.params.runId)) }));

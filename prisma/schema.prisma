@@ -38,6 +38,7 @@ model User {
   mediaAssets  MediaAsset[]
   apiKeys      ApiKey[]
   idempotency  IdempotencyRecord[]
+  toolRuns     ToolInvocation[]
 }
 
 model Chat {
@@ -134,10 +135,12 @@ model RunSkill {
   @@unique([agentRunId, skillName])
 }
 
+// A paid tool call: made by the agent in a run, or run on its own through the public API (no run: agentRunId is null).
 model ToolInvocation {
   id           String               @id @default(cuid())
-  agentRunId   String
-  toolCallId   String // model-generated tool call id
+  userId       String // who pays for it
+  agentRunId   String? // the run that made the call; null for a standalone run through the public API
+  toolCallId   String // model-generated tool call id ("api" for a standalone run)
   toolName     String
   status       ToolInvocationStatus @default(PENDING)
   input        Json
@@ -152,10 +155,12 @@ model ToolInvocation {
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
 
-  agentRun    AgentRun     @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentRun    AgentRun?    @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
   mediaAssets MediaAsset[]
 
-  @@unique([agentRunId, toolCallId])
+  @@unique([agentRunId, toolCallId]) // NULLs are distinct: standalone runs are never matched to each other
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 // A pause in a run until the user answers it: approving a plan, or a spend above the approval threshold. The run waits
