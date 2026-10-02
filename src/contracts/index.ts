@@ -11,3 +11,4 @@ export * from "./media.js";
 export * from "./waitpoints.js";
 export * from "./apikeys.js";
 export * from "./publicapi.js";
+export * from "./webhooks.js";

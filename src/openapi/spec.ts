@@ -23,6 +23,10 @@ import {
   V1SendMessageBodySchema,
   V1ToolRunAcceptedSchema,
   V1ToolRunResponseSchema,
+  WEBHOOK_EVENTS,
+  WebhookEventSchema,
+  WebhookRegisteredSchema,
+  WebhookRequestSchema,
 } from "#src/contracts/index.js";
 
 // The public API's OpenAPI 3.1 document, built from the same Zod contracts the server validates with, so the
@@ -59,6 +63,9 @@ const COMPONENTS = {
   ChatCompletionRequest: [V1ChatCompletionBodySchema, "input"],
   ChatCompletion: [V1ChatCompletionSchema, "output"],
   ChatCompletionPending: [V1ChatCompletionPendingSchema, "output"],
+  WebhookRequest: [WebhookRequestSchema, "input"],
+  WebhookRegistered: [WebhookRegisteredSchema, "output"],
+  WebhookEvent: [WebhookEventSchema, "output"],
 } as const satisfies Record<string, readonly [z.ZodType, "input" | "output"]>;
 
 const ERRORS: Record<string, string> = {
@@ -102,12 +109,40 @@ function completionRequest(): Json {
   return { ...schema, properties: { ...properties, model: { type: "string", const: COMPLETIONS_MODEL, description: "The model: the free model router." } } };
 }
 
+const EVENT_DESCRIPTIONS: Record<(typeof WEBHOOK_EVENTS)[number], string> = {
+  "agent.started": "The agent started working on the message.",
+  "agent.completed": "The agent finished: `data` has the reply's id, the model and usage (tokens and credits).",
+  "agent.failed": "The agent couldn't finish: `error` says why and `data.code` is the stable reason.",
+  "agent.canceled": "The run was stopped.",
+  "tool.completed": "A paid tool call finished (in a run, or a standalone tool run): `data` has its input, credits and what it made.",
+  "tool.failed": "A paid tool call failed: `error` says why. Nothing was charged.",
+};
+
+/** One webhook event as OpenAPI 3.1 describes webhooks: what we POST to your URL, and how to verify it. */
+function webhookOperation(event: (typeof WEBHOOK_EVENTS)[number]): Json {
+  const header = (name: string, description: string) => ({ name, in: "header", required: true, description, schema: { type: "string" } });
+  return {
+    post: {
+      summary: event,
+      description: `${EVENT_DESCRIPTIONS[event]} Verify the signature with the \`svix\` package and the \`whsec_…\` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated \`svix-id\` as the same event.`,
+      parameters: [
+        header("svix-id", "The event's id: the same on every retry of it."),
+        header("svix-timestamp", "When this attempt was sent (seconds since the epoch)."),
+        header("svix-signature", "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`."),
+      ],
+      requestBody: { required: true, content: json(ref("WebhookEvent")) },
+      responses: { "2XX": { description: "Received." } },
+    },
+  };
+}
+
 export function buildOpenApi({ serverUrl = "http://localhost:3000" }: { serverUrl?: string } = {}): Json {
   const tool = (name: string, input: string, what: string) =>
     operation(`Run ${name}`, `${what} Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll \`GET /v1/tools/runs/{runId}\`.`, {
       tags: ["Tools"],
       parameters: [IDEMPOTENCY_HEADER],
-      requestBody: { required: true, content: json(ref(input)) },
+      // the tool's input, with an optional webhook beside it
+      requestBody: { required: true, content: json({ allOf: [ref(input), { type: "object", properties: { webhook: ref("WebhookRequest") } }] }) },
       responses: { "202": { description: "Started.", content: json(ref("ToolRunAccepted")) }, ...errors("400", "401", "402", "409", "429", "503") },
     });
 
@@ -212,6 +247,7 @@ export function buildOpenApi({ serverUrl = "http://localhost:3000" }: { serverUr
         }),
       },
     },
+    webhooks: Object.fromEntries(WEBHOOK_EVENTS.map((event) => [event, webhookOperation(event)])),
     components: {
       securitySchemes: {
         ApiKey: { type: "apiKey", in: "header", name: "x-api-key", description: "An API key (`mgc_…`) from API / MCP in the app." },

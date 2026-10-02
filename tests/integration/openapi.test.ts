@@ -51,7 +51,7 @@ describe("the OpenAPI document", () => {
   it("documents the chat-completions request as the server takes it", () => {
     const request = (built.components as { schemas: Record<string, { properties: Record<string, unknown>; required: string[] }> }).schemas.ChatCompletionRequest!;
     expect(request.properties.model).toMatchObject({ const: "openrouter/free" });
-    expect(Object.keys(request.properties)).toEqual(["model", "messages", "stream"]);
+    expect(Object.keys(request.properties)).toEqual(["model", "messages", "stream", "webhook"]);
     expect(request.required).toEqual(["model", "messages"]);
   });
 });

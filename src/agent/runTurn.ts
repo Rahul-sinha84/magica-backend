@@ -14,6 +14,8 @@ import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
 import type { ToolDefinition, ToolRegistry } from "#src/tools/registry.js";
 import { PROPOSE_PLAN } from "#src/tools/planTools.js";
 import { createWaiter, planApproved, type WaitTokens } from "#src/waitpoints/wait.js";
+import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
+import { recordRunEvent } from "#src/webhooks/events.js";
 
 export type TurnResult = "completed" | "failed" | "cancelled" | "skipped";
 
@@ -117,6 +119,16 @@ function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition)
   };
 }
 
+/** Sends agent.started to the run's webhooks. Never fails the turn: a missed event is logged (and in the outbox). */
+async function announceStart(runId: string): Promise<void> {
+  try {
+    const deliveries = await prisma.$transaction((tx) => recordRunEvent(tx, runId, "agent.started"));
+    if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
+  } catch (err) {
+    logger.warn({ err }, "could not record the run's started event");
+  }
+}
+
 const withThinkingTime = (blocks: ContentBlock[], ms: number | undefined): ContentBlock[] => {
   const first = blocks.findIndex((block) => block.type === "thinking");
   if (ms === undefined || first < 0) return blocks;
@@ -157,6 +169,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
     logger.warn("the run is gone or no longer pending; nothing to do");
     return "skipped";
   }
+  await announceStart(runId);
   logger.info("agent turn started");
   setStatus({ status: "thinking" });
 

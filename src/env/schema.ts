@@ -21,6 +21,14 @@ export const BaseEnvSchema = z.object({
   OPENROUTER_MODEL: z
     .literal("openrouter/free", { error: 'must be "openrouter/free" (paid models are not allowed)' })
     .default("openrouter/free"),
+  // Encrypts webhook signing secrets at rest (AES-256-GCM): 32 random bytes as 64 hex characters (`openssl rand -hex
+  // 32`). The API encrypts with it and the worker decrypts to sign deliveries, so both need the same value. Optional:
+  // without it, asking for a webhook is answered "unavailable".
+  WEBHOOK_SECRET_KEY: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-fA-F]{64}$/, { error: "must be 64 hex characters (openssl rand -hex 32)" })
+    .optional(),
 });
 
 export const ServerEnvSchema = BaseEnvSchema.extend({

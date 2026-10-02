@@ -5,6 +5,8 @@ import { holdKey, releaseKey } from "#src/lib/idempotency.js";
 import { logger } from "#src/lib/logger.js";
 import { release } from "#src/services/credits.js";
 import { endActiveInvocations } from "#src/services/toolInvocations.js";
+import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
+import { recordRunEvent } from "#src/webhooks/events.js";
 
 // Shared by the API and the Trigger.dev worker, so it must not import anything that only the server configures.
 
@@ -31,7 +33,10 @@ export interface RunOutcome {
 // What the JSONB column will hold: plain JSON, with `undefined` keys dropped exactly as the database would drop them.
 export const toJson = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
-async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolean> {
+const RUN_EVENT = { COMPLETED: "agent.completed", FAILED: "agent.failed", CANCELLED: "agent.canceled" } as const;
+
+/** Ends the run; `deliveries` collects the webhook deliveries it records, to be sent once the transaction commits. */
+async function apply(tx: Tx, runId: string, outcome: RunOutcome, deliveries: string[] = []): Promise<boolean> {
   // The compare-and-set that makes every way of ending a run safe to race: only the first caller wins.
   const { count } = await tx.agentRun.updateMany({
     where: { id: runId, status: { in: [...ACTIVE_STATUSES] } },
@@ -80,6 +85,7 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
   }
 
   if (outcome.status === "COMPLETED") await tx.chat.update({ where: { id: run.chatId }, data: { lastMessageAt: new Date() } });
+  deliveries.push(...(await recordRunEvent(tx, runId, RUN_EVENT[outcome.status])));
   return true;
 }
 
@@ -108,9 +114,12 @@ export function closeOpenWaitpoints(blocks: ContentBlock[], status: "expired" | 
  * message, and releases the credit hold. Returns false (and changes nothing) if the run had already ended.
  */
 export async function finalizeRun(runId: string, outcome: RunOutcome, tx?: Tx): Promise<boolean> {
-  if (tx) return apply(tx, runId, outcome); // the caller's transaction decides whether this sticks, so it logs
-  const ended = await prisma.$transaction((t) => apply(t, runId, outcome));
+  // the caller's transaction decides whether this sticks, so it logs (its webhooks are sent by the outbox sweeper)
+  if (tx) return apply(tx, runId, outcome);
+  const deliveries: string[] = [];
+  const ended = await prisma.$transaction((t) => apply(t, runId, outcome, deliveries));
   if (ended) logger.info({ runId, status: outcome.status, errorCode: outcome.errorCode }, "run ended");
+  if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
   return ended;
 }
 

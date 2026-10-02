@@ -5,9 +5,10 @@ import { hold } from "#src/services/credits.js";
 import { env } from "#src/env/base.js";
 import { resetClerkMock } from "./clerkMock.js";
 import { resetTriggerMock } from "./triggerMock.js";
+import { resetWebhookMock } from "./webhookMock.js";
 import { assertTestDatabase } from "./guard.js";
 
-const TABLES = ["IdempotencyRecord", "ApiKey", "Waitpoint", "Attachment", "Upload", "MediaAsset", "CreditLedger", "ToolInvocation", "RunSkill", "AgentRun", "Message", "Chat", "User"] as const;
+const TABLES = ["WebhookDelivery", "WebhookSubscription", "WebhookEndpoint", "IdempotencyRecord", "ApiKey", "Waitpoint", "Attachment", "Upload", "MediaAsset", "CreditLedger", "ToolInvocation", "RunSkill", "AgentRun", "Message", "Chat", "User"] as const;
 
 export async function resetDb(): Promise<void> {
   assertTestDatabase(env.DATABASE_URL);
@@ -15,6 +16,7 @@ export async function resetDb(): Promise<void> {
   clearUserCache(); // the users it remembered no longer exist
   resetClerkMock();
   resetTriggerMock();
+  resetWebhookMock();
 }
 
 let counter = 0;

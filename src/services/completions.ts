@@ -4,6 +4,7 @@ import { AppError } from "#src/lib/errors.js";
 import { logger } from "#src/lib/logger.js";
 import { createChat, deleteChat } from "#src/services/chats.js";
 import type { StoredResponse } from "#src/services/idempotency.js";
+import type { WebhookTarget } from "#src/services/webhooks.js";
 import { ACTIVE_STATUSES } from "#src/services/runs.js";
 import { sendMessage } from "#src/services/turns.js";
 
@@ -17,6 +18,7 @@ export interface CompletionOptions {
   pollMs?: number;
   /** aborted when the caller goes away: stop waiting (the run carries on) */
   signal?: AbortSignal;
+  webhook?: WebhookTarget;
 }
 
 const text = (content: V1ChatCompletionBody["messages"][number]["content"]) => (typeof content === "string" ? content : content.map((part) => part.text).join(""));
@@ -41,7 +43,7 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
   });
 
-export async function createCompletion(userId: string, body: V1ChatCompletionBody, { traceId, waitMs = COMPLETIONS_WAIT_MS, pollMs = 500, signal }: CompletionOptions): Promise<StoredResponse> {
+export async function createCompletion(userId: string, body: V1ChatCompletionBody, { traceId, waitMs = COMPLETIONS_WAIT_MS, pollMs = 500, signal, webhook }: CompletionOptions): Promise<StoredResponse> {
   const question = text(body.messages.at(-1)!.content);
   if (!question.trim()) throw new AppError("VALIDATION_FAILED", "messages: The last message can't be empty.");
 
@@ -63,7 +65,7 @@ export async function createCompletion(userId: string, body: V1ChatCompletionBod
         },
       });
     }
-    runId = (await sendMessage({ userId, chatId: chat.id, body: { content: question, attachments: [], mode: "default" }, traceId })).runId;
+    runId = (await sendMessage({ userId, chatId: chat.id, body: { content: question, attachments: [], mode: "default" }, traceId, ...(webhook && { webhook }) })).runId;
   } catch (error) {
     await deleteChat(userId, chat.id).catch((err: unknown) => logger.warn({ err }, "could not remove the chat of a completion that didn't start"));
     throw error;

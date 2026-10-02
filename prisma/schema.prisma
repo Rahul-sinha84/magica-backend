@@ -39,6 +39,7 @@ model User {
   apiKeys      ApiKey[]
   idempotency  IdempotencyRecord[]
   toolRuns     ToolInvocation[]
+  webhooks     WebhookEndpoint[]
 }
 
 model Chat {
@@ -104,16 +105,17 @@ model AgentRun {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  chat             Chat             @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  triggerMessage   Message          @relation("TriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
-  assistantMessage Message          @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
-  retryOf          AgentRun?        @relation("Retries", fields: [retryOfRunId], references: [id], onDelete: SetNull)
-  retriedBy        AgentRun?        @relation("Retries")
+  chat             Chat                  @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggerMessage   Message               @relation("TriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
+  assistantMessage Message               @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  retryOf          AgentRun?             @relation("Retries", fields: [retryOfRunId], references: [id], onDelete: SetNull)
+  retriedBy        AgentRun?             @relation("Retries")
   loadedSkills     RunSkill[]
   toolInvocations  ToolInvocation[]
   creditLedger     CreditLedger[]
   waitpoints       Waitpoint[]
+  webhooks         WebhookSubscription[]
 
   @@index([chatId, createdAt(sort: Desc)])
   @@index([triggerMessageId])
@@ -155,9 +157,10 @@ model ToolInvocation {
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
 
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  agentRun    AgentRun?    @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentRun    AgentRun?             @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
   mediaAssets MediaAsset[]
+  webhooks    WebhookSubscription[]
 
   @@unique([agentRunId, toolCallId]) // NULLs are distinct: standalone runs are never matched to each other
   @@index([userId, createdAt(sort: Desc)])
@@ -224,6 +227,62 @@ model IdempotencyRecord {
 
   @@unique([userId, scope, key])
   @@index([createdAt])
+}
+
+// A destination a user sends webhooks to: one per (user, URL), with its own signing secret, so the same destination
+// always gets the same secret back (as the reference does). The secret is stored encrypted (AES-256-GCM).
+model WebhookEndpoint {
+  id              String   @id @default(cuid())
+  userId          String
+  url             String
+  secretEncrypted String // "v1:<iv>:<tag>:<ciphertext>" (see src/lib/webhookSigning.ts)
+  createdAt       DateTime @default(now())
+
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions WebhookSubscription[]
+
+  @@unique([userId, url])
+}
+
+// One start's request for webhooks (POST /v1/messages, a tool run, a completion): which events, sent where, with what
+// metadata echoed back. It belongs to an agent run or to a standalone tool run, never both.
+model WebhookSubscription {
+  id               String   @id @default(cuid())
+  endpointId       String
+  agentRunId       String?
+  toolInvocationId String?
+  events           String[]
+  metadata         Json?
+  createdAt        DateTime @default(now())
+
+  endpoint       WebhookEndpoint   @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  agentRun       AgentRun?         @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  toolInvocation ToolInvocation?   @relation(fields: [toolInvocationId], references: [id], onDelete: Cascade)
+  deliveries     WebhookDelivery[]
+
+  @@index([agentRunId])
+  @@index([toolInvocationId])
+}
+
+// One event to send to one subscription: written in the same transaction as the change it reports, then sent by the
+// deliver-webhook task (with retries). Unique per (subscription, event), so an event is never sent twice.
+model WebhookDelivery {
+  id             String                @id @default(cuid())
+  subscriptionId String
+  eventId        String // what makes it the same event: "agent.started", or "tool.completed:<tool call id>"
+  type           String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, eventId])
+  @@index([status, createdAt])
 }
 
 // Signed amount, from the point of view of the counter it changes:
@@ -360,6 +419,12 @@ enum ToolInvocationStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
 }
 
 enum IdempotencyStatus {

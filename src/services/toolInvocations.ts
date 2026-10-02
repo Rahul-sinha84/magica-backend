@@ -4,6 +4,8 @@ import { AppError } from "#src/lib/errors.js";
 import { toolChargeKey, toolHoldKey, toolReleaseKey } from "#src/lib/idempotency.js";
 import { charge, hold, release } from "#src/services/credits.js";
 import { addGeneratedMedia } from "#src/services/media.js";
+import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
+import { recordToolEvent } from "#src/webhooks/events.js";
 
 type Tx = Prisma.TransactionClient;
 // JSONB holds plain JSON (undefined keys dropped, as the database would drop them)
@@ -104,7 +106,8 @@ export interface Completion {
  * transaction as the status change. False when the call had already ended (cancelled meanwhile): nothing is charged.
  */
 export async function completeInvocation(invocationId: string, done: Completion, db: typeof prisma = prisma): Promise<boolean> {
-  return db.$transaction(async (tx) => {
+  const deliveries: string[] = [];
+  const completed = await db.$transaction(async (tx) => {
     const reserved = await heldFor(tx, invocationId);
     const { count } = await tx.toolInvocation.updateMany({
       where: { id: invocationId, status: { in: ["DISPATCHING", "RUNNING"] } },
@@ -125,8 +128,11 @@ export async function completeInvocation(invocationId: string, done: Completion,
       await charge(tx, { ...entry, reason: "tool call", idempotencyKey: toolChargeKey(invocationId) });
     }
     if (done.assets?.length) await addGeneratedMedia(tx, invocationId, done.assets);
+    deliveries.push(...(await recordToolEvent(tx, invocationId, "tool.completed")));
     return true;
   });
+  if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
+  return completed;
 }
 
 /**
@@ -134,7 +140,10 @@ export async function completeInvocation(invocationId: string, done: Completion,
  * it had already ended. `errorMessage` must be safe to show.
  */
 export async function endInvocation(invocationId: string, status: "FAILED" | "CANCELLED", errorMessage: string | null, db: typeof prisma = prisma): Promise<boolean> {
-  return db.$transaction((tx) => endInvocationIn(tx, invocationId, status, errorMessage));
+  const deliveries: string[] = [];
+  const ended = await db.$transaction((tx) => endInvocationIn(tx, invocationId, status, errorMessage, deliveries));
+  if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
+  return ended;
 }
 
 /**
@@ -149,7 +158,7 @@ export async function endActiveInvocations(tx: Tx, agentRunId: string, errorMess
   return ended;
 }
 
-async function endInvocationIn(tx: Tx, invocationId: string, status: "FAILED" | "CANCELLED", errorMessage: string | null): Promise<boolean> {
+async function endInvocationIn(tx: Tx, invocationId: string, status: "FAILED" | "CANCELLED", errorMessage: string | null, deliveries: string[] = []): Promise<boolean> {
   {
     const current = await tx.toolInvocation.findUnique({ where: { id: invocationId }, select: { dispatchedAt: true } });
     const { count } = await tx.toolInvocation.updateMany({
@@ -167,6 +176,8 @@ async function endInvocationIn(tx: Tx, invocationId: string, status: "FAILED" | 
     if (reserved) {
       await release(tx, { userId: reserved.userId, amount: reserved.amount, agentRunId: reserved.agentRunId ?? undefined, reason: `tool call ${status.toLowerCase()}`, idempotencyKey: toolReleaseKey(invocationId) });
     }
+    // a failure is news; a stop isn't (the run's own event says it ended)
+    if (status === "FAILED") deliveries.push(...(await recordToolEvent(tx, invocationId, "tool.failed")));
     return true;
   }
 }

@@ -690,7 +690,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GptImage2Input"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/GptImage2Input"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "webhook": {
+                        "$ref": "#/components/schemas/WebhookRequest"
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -793,7 +805,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CropImageInput"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CropImageInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "webhook": {
+                        "$ref": "#/components/schemas/WebhookRequest"
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -896,7 +920,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MergeVideosInput"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/MergeVideosInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "webhook": {
+                        "$ref": "#/components/schemas/WebhookRequest"
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -1175,6 +1211,308 @@
       }
     }
   },
+  "webhooks": {
+    "agent.started": {
+      "post": {
+        "summary": "agent.started",
+        "description": "The agent started working on the message. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "agent.completed": {
+      "post": {
+        "summary": "agent.completed",
+        "description": "The agent finished: `data` has the reply's id, the model and usage (tokens and credits). Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "agent.failed": {
+      "post": {
+        "summary": "agent.failed",
+        "description": "The agent couldn't finish: `error` says why and `data.code` is the stable reason. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "agent.canceled": {
+      "post": {
+        "summary": "agent.canceled",
+        "description": "The run was stopped. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "tool.completed": {
+      "post": {
+        "summary": "tool.completed",
+        "description": "A paid tool call finished (in a run, or a standalone tool run): `data` has its input, credits and what it made. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "tool.failed": {
+      "post": {
+        "summary": "tool.failed",
+        "description": "A paid tool call failed: `error` says why. Nothing was charged. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    }
+  },
   "components": {
     "securitySchemes": {
       "ApiKey": {
@@ -1268,6 +1606,42 @@
           "chatId": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "events": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "agent.started",
+                    "agent.completed",
+                    "agent.failed",
+                    "agent.canceled",
+                    "tool.completed",
+                    "tool.failed"
+                  ]
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -1290,6 +1664,20 @@
           "status": {
             "type": "string",
             "const": "queued"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -2811,6 +3199,20 @@
           "status": {
             "type": "string",
             "const": "queued"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -3021,6 +3423,42 @@
           "stream": {
             "type": "boolean",
             "const": false
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "events": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "agent.started",
+                    "agent.completed",
+                    "agent.failed",
+                    "agent.canceled",
+                    "tool.completed",
+                    "tool.failed"
+                  ]
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -3115,6 +3553,20 @@
           },
           "run_id": {
             "type": "string"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -3151,6 +3603,20 @@
               "failed",
               "cancelled"
             ]
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -3158,6 +3624,120 @@
           "run_id",
           "chat_id",
           "status"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookRequest": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "events": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "agent.started",
+                "agent.completed",
+                "agent.failed",
+                "agent.canceled",
+                "tool.completed",
+                "tool.failed"
+              ]
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookRegistered": {
+        "type": "object",
+        "properties": {
+          "signingSecret": {
+            "type": "string",
+            "format": "starts_with",
+            "pattern": "^whsec_.*"
+          }
+        },
+        "required": [
+          "signingSecret"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "agent.started",
+              "agent.completed",
+              "agent.failed",
+              "agent.canceled",
+              "tool.completed",
+              "tool.failed"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "success",
+          "type",
+          "runId",
+          "data",
+          "metadata",
+          "error",
+          "createdAt"
         ],
         "additionalProperties": false
       }

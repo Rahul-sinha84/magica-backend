@@ -267,6 +267,9 @@ importers:
       supertest:
         specifier: ^7.3.0
         version: 7.3.0(supports-color@10.2.2)
+      svix:
+        specifier: ^2.6.1
+        version: 2.6.1
       trigger.dev:
         specifier: 4.6.4
         version: 4.6.4(typescript@5.9.3)(valibot@1.4.2(typescript@5.9.3))
@@ -3069,6 +3072,10 @@ packages:
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
+
+  svix@2.6.1:
+    resolution: {integrity: sha512-BFB4H1qfbqWNBGHsmfeJxvelqhvfDFV7Il+5ZaF3mMo+ew0BxI6BROJB/agwbEK2DTcP0Ye2NT6+lkTqDfYifA==}
+    engines: {node: '>=22'}
 
   systeminformation@5.33.14:
     resolution: {integrity: sha512-9liS0hutibZOitbibm90AK3WZe/1rGhNGZSw+/4TbY5moax6KkWwv1TKJmk9uSOD4bvPPg57VAuuNN+4edIpBg==}
@@ -6172,6 +6179,10 @@ snapshots:
   supports-color@10.2.2: {}
 
   supports-preserve-symlinks-flag@1.0.0: {}
+
+  svix@2.6.1:
+    dependencies:
+      standardwebhooks: 1.1.1
 
   systeminformation@5.33.14: {}
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ErrorResponseSchema, IsoDateTimeSchema } from "./common.js";
 import { RunModeSchema, SendMessageBodySchema } from "./messages.js";
 import { WaitpointSchema } from "./waitpoints.js";
+import { WebhookRegisteredSchema, WebhookRequestSchema } from "./webhooks.js";
 
 // The public API, /v1. Authenticated with an API key (`x-api-key: mgc_…` or `Authorization: Bearer mgc_…`) or a
 // signed-in session token. Every response carries `x-api-version: 1`. Starting work returns at once with a run id to
@@ -26,6 +27,8 @@ export const V1SendMessageBodySchema = SendMessageBodySchema.omit({ clientMessag
     .string()
     .regex(/^[A-Za-z0-9_-]{1,64}$/, { error: "That isn't a chat id." })
     .optional(),
+  // signed events about this run, sent to your URL
+  webhook: WebhookRequestSchema.optional(),
 });
 
 export const V1MessageAcceptedSchema = z.object({
@@ -33,6 +36,8 @@ export const V1MessageAcceptedSchema = z.object({
   messageId: z.string(),
   runId: z.string(),
   status: z.literal("queued"),
+  // when a webhook was given: its signing secret
+  webhook: WebhookRegisteredSchema.optional(),
 });
 
 // queued: waiting for a worker. running: working. waiting: paused until you answer `pendingWaitpoint`.
@@ -88,7 +93,8 @@ export const V1RunResponseSchema = z.object({ run: V1RunSchema });
 // GET /v1/tools/runs/{runId}.
 export const V1_TOOL_PATHS = { "gpt-image-2": "gpt_image_2", "crop-image": "crop_image", "merge-videos": "merge_videos" } as const;
 
-export const V1ToolRunAcceptedSchema = z.object({ runId: z.string(), status: z.literal("queued") });
+// The body may also carry `webhook` (next to the input fields) for signed tool.completed / tool.failed events.
+export const V1ToolRunAcceptedSchema = z.object({ runId: z.string(), status: z.literal("queued"), webhook: WebhookRegisteredSchema.optional() });
 export const V1ToolRunResponseSchema = z.object({ run: V1ToolCallSchema });
 
 // ---- chat completions ----
@@ -115,6 +121,7 @@ export const V1ChatCompletionBodySchema = z.looseObject({
   stream: z.literal(false, { error: "Streaming isn't supported: leave stream out or set it to false." }).optional(),
   tools: z.undefined({ error: "Tool definitions aren't supported: the agent uses its own tools." }).optional(),
   functions: z.undefined({ error: "Tool definitions aren't supported: the agent uses its own tools." }).optional(),
+  webhook: WebhookRequestSchema.optional(),
 });
 
 export const V1ChatCompletionSchema = z.object({
@@ -126,6 +133,7 @@ export const V1ChatCompletionSchema = z.object({
   usage: z.object({ prompt_tokens: z.int(), completion_tokens: z.int(), total_tokens: z.int() }),
   // the run behind it (GET /v1/runs/{run_id}): what tools it used and what they made
   run_id: z.string(),
+  webhook: WebhookRegisteredSchema.optional(),
 });
 
 // 202: still working after about a minute. Poll GET /v1/runs/{run_id}; status "waiting" means it waits for an answer.
@@ -134,6 +142,7 @@ export const V1ChatCompletionPendingSchema = z.object({
   run_id: z.string(),
   chat_id: z.string(),
   status: V1RunStatusSchema,
+  webhook: WebhookRegisteredSchema.optional(),
 });
 
 export type V1ErrorResponse = z.infer<typeof V1ErrorResponseSchema>;

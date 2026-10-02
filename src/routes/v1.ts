@@ -22,7 +22,10 @@ import {
   V1SendMessageBodySchema,
   V1ToolRunResponseSchema,
   V1_TOOL_PATHS,
+  WebhookRequestSchema,
+  type WebhookRequest,
 } from "#src/contracts/index.js";
+import { z } from "zod";
 import { prisma } from "#src/db/client.js";
 import { AppError, toErrorResponse } from "#src/lib/errors.js";
 import { IdSchema } from "#src/lib/cursor.js";
@@ -40,6 +43,7 @@ import { createCompletion } from "#src/services/completions.js";
 import { getToolRun, startToolRun } from "#src/services/toolRuns.js";
 import { cancelV1Run, getV1Run } from "#src/services/v1Runs.js";
 import { respondToWaitpoint } from "#src/services/waitpoints.js";
+import { registerWebhook, type WebhookTarget } from "#src/services/webhooks.js";
 
 // The public API, /v1. It reuses the app's own services (the same rules, the same records); only the way in differs:
 // an API key or a session token, per-key limits, and errors that carry the trace id.
@@ -64,6 +68,19 @@ function presentedKey(req: Request): string | undefined {
 }
 
 const traceIdOf = () => logContext.getStore()?.traceId ?? randomUUID();
+
+/**
+ * Registers the start's webhook, if it asked for one. Done before the idempotent work, and its secret is added to the
+ * answer afterwards: the secret is never stored with the answer, yet a replay still returns it (same URL, same secret).
+ */
+async function withWebhook(userId: string, request: WebhookRequest | undefined) {
+  const registered = request ? await registerWebhook(userId, request) : null;
+  const target: WebhookTarget | undefined = registered?.target;
+  return {
+    target,
+    answer: (body: unknown) => (registered ? { ...(body as Record<string, unknown>), webhook: { signingSecret: registered.signingSecret } } : body),
+  };
+}
 
 export interface V1Options {
   /** verifies a session token (the app's Clerk middleware) */
@@ -146,12 +163,13 @@ export function v1Router(options: V1Options): Router {
     const body = V1SendMessageBodySchema.parse(req.body);
     const key = parseIdempotencyKey(req.get("idempotency-key"));
     const userId = currentUserId(res);
+    const webhook = await withWebhook(userId, body.webhook);
     const result = await withIdempotency({ userId, scope: "POST /v1/messages", key, body }, async () => {
       if (body.chatId) await requireChat(userId, body.chatId);
       const chatId = body.chatId ?? (await createChat(userId)).id;
       addLogContext({ chatId });
       try {
-        const turn = await sendMessage({ userId, chatId, body: { content: body.content, attachments: body.attachments, mode: body.mode }, traceId: traceIdOf() });
+        const turn = await sendMessage({ userId, chatId, body: { content: body.content, attachments: body.attachments, mode: body.mode }, traceId: traceIdOf(), ...(webhook.target && { webhook: webhook.target }) });
         addLogContext({ runId: turn.runId, messageId: turn.message.id });
         logger.info("message accepted through the public API");
         return { status: 202, body: V1MessageAcceptedSchema.parse({ chatId, messageId: turn.message.id, runId: turn.runId, status: "queued" }) };
@@ -161,7 +179,7 @@ export function v1Router(options: V1Options): Router {
       }
     });
     res.setHeader("idempotent-replayed", String(result.replayed));
-    res.status(result.status).json(result.body);
+    res.status(result.status).json(webhook.answer(result.body));
   });
 
   const runId = (raw: string) => {
@@ -179,9 +197,12 @@ export function v1Router(options: V1Options): Router {
     if (!tool) throw new AppError("NOT_FOUND", `There is no tool "${path.slice(0, 64)}". Use ${Object.keys(V1_TOOL_PATHS).join(", ")}.`);
     const userId = currentUserId(res);
     const key = parseIdempotencyKey(req.get("idempotency-key"));
-    const result = await withIdempotency({ userId, scope: `POST /v1/tools/${path}`, key, body: req.body }, () => startToolRun(userId, tool, req.body, traceIdOf()));
+    // the body is the tool's input, with an optional `webhook` beside it
+    const { webhook: requested, ...input } = (req.body ?? {}) as Record<string, unknown>;
+    const webhook = await withWebhook(userId, z.object({ webhook: WebhookRequestSchema.optional() }).parse({ webhook: requested }).webhook);
+    const result = await withIdempotency({ userId, scope: `POST /v1/tools/${path}`, key, body: req.body }, () => startToolRun(userId, tool, input, traceIdOf(), webhook.target));
     res.setHeader("idempotent-replayed", String(result.replayed));
-    res.status(result.status).json(result.body);
+    res.status(result.status).json(webhook.answer(result.body));
   });
 
   router.get("/tools/runs/:runId", async (req, res) => {
@@ -193,13 +214,19 @@ export function v1Router(options: V1Options): Router {
     const body = V1ChatCompletionBodySchema.parse(req.body);
     const userId = currentUserId(res);
     const key = parseIdempotencyKey(req.get("idempotency-key"));
+    const webhook = await withWebhook(userId, body.webhook);
     const gone = new AbortController(); // the caller hung up: stop waiting (the run carries on)
     res.on("close", () => gone.abort());
     const result = await withIdempotency({ userId, scope: "POST /v1/chat/completions", key, body }, () =>
-      createCompletion(userId, body, { traceId: traceIdOf(), signal: gone.signal, ...(options.completionWaitMs !== undefined && { waitMs: options.completionWaitMs }) }),
+      createCompletion(userId, body, {
+        traceId: traceIdOf(),
+        signal: gone.signal,
+        ...(options.completionWaitMs !== undefined && { waitMs: options.completionWaitMs }),
+        ...(webhook.target && { webhook: webhook.target }),
+      }),
     );
     res.setHeader("idempotent-replayed", String(result.replayed));
-    res.status(result.status).json(result.body);
+    res.status(result.status).json(webhook.answer(result.body));
   });
 
   router.get("/chats", async (req, res) => {

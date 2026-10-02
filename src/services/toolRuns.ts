@@ -8,6 +8,7 @@ import type { StoredResponse } from "#src/services/idempotency.js";
 import { QUEUE_LIMIT_MS, TOOL_CALL_LIMIT_MS } from "#src/services/reconcile.js";
 import { createInvocation, endInvocation } from "#src/services/toolInvocations.js";
 import { toolCallView } from "#src/services/v1Runs.js";
+import { subscribe, type WebhookTarget } from "#src/services/webhooks.js";
 import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
 
 // Standalone tool runs (the public API's /v1/tools): one Magica tool, run directly. They go through the same steps as
@@ -20,9 +21,10 @@ export type StandaloneTool = keyof typeof INPUTS;
 const notFound = () => new AppError("NOT_FOUND", "That tool run isn't there.");
 
 /** Checks the input, records the call (reserving its credits) and starts it. 402 when the credits aren't there. */
-export async function startToolRun(userId: string, tool: StandaloneTool, rawInput: unknown, traceId: string): Promise<StoredResponse> {
+export async function startToolRun(userId: string, tool: StandaloneTool, rawInput: unknown, traceId: string, webhook?: WebhookTarget): Promise<StoredResponse> {
   const input = INPUTS[tool].parse(rawInput);
   const invocation = await createInvocation({ userId, agentRunId: null, toolCallId: "api", toolName: tool, input, creditCost: TOOL_CREDIT_COSTS[tool] });
+  if (webhook) await prisma.$transaction((tx) => subscribe(tx, webhook, { toolInvocationId: invocation.id })); // before it starts
   try {
     await dispatchToolRun({ invocationId: invocation.id, userId, traceId }, toolTaskKey("api", invocation.id));
   } catch (err) {

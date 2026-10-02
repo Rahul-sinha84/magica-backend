@@ -13,6 +13,7 @@ import { requireChat } from "#src/services/chats.js";
 import { ACTIVE_STATUSES, RETRYABLE_STATUSES, finalizeRun } from "#src/services/runs.js";
 import { attachableAssets } from "#src/services/media.js";
 import { WITH_ATTACHMENTS, serializeMessage } from "#src/services/serialize.js";
+import { subscribe, type WebhookTarget } from "#src/services/webhooks.js";
 
 const PROVISIONAL_TITLE_MAX = 50;
 const DISPATCH_TIMEOUT_MS = 8_000;
@@ -73,7 +74,7 @@ async function replay(chatId: string, body: SendMessageBody, replayWaitMs: numbe
  * Everything a send needs, written together or not at all: the message, the placeholder for the reply, the run (whose
  * unique index allows one active run per chat) and the credit hold. A refused hold rolls all of it back.
  */
-function createTurn(userId: string, chatId: string, body: SendMessageBody, traceId: string) {
+function createTurn(userId: string, chatId: string, body: SendMessageBody, traceId: string, webhook?: WebhookTarget) {
   return prisma.$transaction(async (tx) => {
     const now = new Date();
     const replyAt = new Date(now.getTime() + 1); // strictly after the question, so history always reads question then answer
@@ -90,6 +91,7 @@ function createTurn(userId: string, chatId: string, body: SendMessageBody, trace
       data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, mode: RUN_MODE[body.mode] },
     });
     await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold", idempotencyKey: holdKey(run.id), agentRunId: run.id });
+    if (webhook) await subscribe(tx, webhook, { agentRunId: run.id }); // before the turn starts, so it hears agent.started
 
     // a chat still called "New chat" takes its name from its first message, so the sidebar is never a column of "New chat"
     const provisional = titleFrom(body.content, PROVISIONAL_TITLE_MAX);
@@ -146,7 +148,7 @@ async function dispatch(created: Created, userId: string, chatId: string, traceI
 }
 
 export async function sendMessage(
-  { userId, chatId, body: received, traceId }: { userId: string; chatId: string; body: SendMessageBody; traceId: string },
+  { userId, chatId, body: received, traceId, webhook }: { userId: string; chatId: string; body: SendMessageBody; traceId: string; webhook?: WebhookTarget },
   { dispatchTimeoutMs = DISPATCH_TIMEOUT_MS, replayWaitMs = REPLAY_WAIT_MS }: SendOptions = {},
 ): Promise<SentTurn> {
   const body = { ...received, content: wellFormed(received.content) }; // exactly what will be stored, so replays compare equal
@@ -158,7 +160,7 @@ export async function sendMessage(
 
     let created: Created;
     try {
-      created = await createTurn(userId, chatId, body, traceId);
+      created = await createTurn(userId, chatId, body, traceId, webhook);
     } catch (error) {
       if (violates(error, "Message_chatId_clientMessageId_key")) continue; // a twin of this request won the race: replay it
       if (error instanceof AppError && error.code === "INSUFFICIENT_CREDITS" && (await reconcileUserRuns(userId, { force: true }))) {
