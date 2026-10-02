@@ -42,6 +42,27 @@ export const ChatListResponseSchema = z.object({
   cursor: z.string().nullable(),
 });
 
+// Search over the caller's chat titles and message content, as typed: `%` and `_` are ordinary characters, and case is
+// ignored. At least 3 characters, because shorter terms can't use the search index and would scan every message.
+export const SEARCH_QUERY_MIN = 3;
+export const SEARCH_QUERY_MAX = 100;
+export const ChatSearchQuerySchema = z.object({
+  q: z
+    .string()
+    .trim()
+    .min(SEARCH_QUERY_MIN, { error: `Type at least ${SEARCH_QUERY_MIN} characters to search.` })
+    .max(SEARCH_QUERY_MAX)
+    .refine(noNul, { error: NO_NUL_MESSAGE }),
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+// Matching chats, most recent activity first (one entry per chat, however many of its messages match). `cursor`
+// fetches the next page of the same search and is null at the end.
+export const ChatSearchResponseSchema = ChatListResponseSchema;
+
 export type Chat = z.infer<typeof ChatSchema>;
 export type CreateChatBody = z.infer<typeof CreateChatBodySchema>;
 export type UpdateChatBody = z.infer<typeof UpdateChatBodySchema>;
+export type ChatSearchQuery = z.infer<typeof ChatSearchQuerySchema>;
+export type ChatSearchResponse = z.infer<typeof ChatSearchResponseSchema>;

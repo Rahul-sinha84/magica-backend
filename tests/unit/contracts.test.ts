@@ -15,6 +15,7 @@ import {
   ErrorResponseSchema,
   IsoDateTimeSchema,
   ModelsResponseSchema,
+  ChatSearchQuerySchema,
   MessageListResponseSchema,
   MessageSchema,
   RunStatusSchema,
@@ -437,5 +438,16 @@ describe("ModelsResponseSchema", () => {
     expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, health: "fine" } }).success).toBe(false);
     expect(ModelsResponseSchema.safeParse({ ...body, models: [{ ...body.models[0], free: false }] }).success).toBe(false);
     expect(ModelsResponseSchema.safeParse({ ...body, models: [{ ...body.models[0], provider: "openai" }] }).success).toBe(false);
+  });
+});
+
+describe("ChatSearchQuerySchema", () => {
+  it("trims the query and pages 20 at a time unless asked", () => {
+    expect(ChatSearchQuerySchema.parse({ q: "  red fox  " })).toEqual({ q: "red fox", limit: 20 });
+    expect(ChatSearchQuerySchema.parse({ q: "red", limit: "50", cursor: "abc" })).toEqual({ q: "red", limit: 50, cursor: "abc" });
+  });
+
+  it.each([{}, { q: "ab" }, { q: " ab " }, { q: "x".repeat(101) }, { q: "abc\u0000" }, { q: "abc", limit: 51 }, { q: "abc", limit: 0 }, { q: "abc", cursor: "" }])("rejects %j", (query) => {
+    expect(ChatSearchQuerySchema.safeParse(query).success).toBe(false);
   });
 });
