@@ -42,6 +42,8 @@ export interface TurnTools {
   maxSteps?: number;
   /** Waitpoint tokens, for pausing until the user answers (plan approval, spend approval). Without them the turn can't wait. */
   waitpoints?: WaitTokens;
+  /** A step whose paid calls cost more than this asks the user to approve the spend. Absent: never asked. */
+  creditApprovalThreshold?: number;
 }
 
 /** A turn may call the model at most this many times (each step may use tools); then it stops with what it has. */
@@ -285,7 +287,8 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
       }
 
       usedTools = true;
-      const refuse = turnRules(planMode, planMode && (await planApproved(runId)));
+      const approved = planMode && (await planApproved(runId));
+      const refuse = turnRules(planMode, approved);
       const result = await runToolStep(calls, {
         registry: tools.registry,
         runMagicaCalls: tools.runMagicaCalls,
@@ -309,6 +312,8 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
         },
         ...(waiter && { waitFor: waiter }),
         refuse,
+        // an approved plan covers the turn's spend
+        ...(tools.creditApprovalThreshold !== undefined && { spendApproval: { threshold: tools.creditApprovalThreshold, covered: approved } }),
       });
       if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("stopped", "AbortError");
       lastSave = now();

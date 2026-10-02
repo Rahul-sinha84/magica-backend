@@ -162,7 +162,8 @@ describe("worker env", () => {
   });
 
   it("defaults to 20 turns at once and 10 database connections, and accepts other sensible values", () => {
-    expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 20, DATABASE_POOL_MAX: 10 });
+    expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 20, DATABASE_POOL_MAX: 10, CREDIT_APPROVAL_THRESHOLD: 2_000_000 });
+    expect(parseEnv(WorkerEnvSchema, { ...worker, CREDIT_APPROVAL_THRESHOLD: "0" })).toMatchObject({ CREDIT_APPROVAL_THRESHOLD: 0 });
     expect(parseEnv(WorkerEnvSchema, { ...worker, AGENT_CONCURRENCY_LIMIT: "1000", DATABASE_POOL_MAX: "1" })).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 1000, DATABASE_POOL_MAX: 1 });
   });
 
@@ -171,6 +172,9 @@ describe("worker env", () => {
     ["AGENT_CONCURRENCY_LIMIT", "1001"],
     ["AGENT_CONCURRENCY_LIMIT", "2.5"],
     ["AGENT_CONCURRENCY_LIMIT", "lots"],
+    ["CREDIT_APPROVAL_THRESHOLD", "-1"],
+    ["CREDIT_APPROVAL_THRESHOLD", "1.5"],
+    ["CREDIT_APPROVAL_THRESHOLD", "a lot"],
     ["DATABASE_POOL_MAX", "0"],
     ["DATABASE_POOL_MAX", "101"],
   ])("rejects %s=%s", (key, value) => {

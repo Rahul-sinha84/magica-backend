@@ -96,7 +96,10 @@ export const agentTurn = task({
           setStatus,
           triggerRunId: ctx.run.id,
           signal,
-          tools: { registry: agentTools, skills: skills().metadata(), runMagicaCalls: (calls) => runMagicaCalls(payload.agentRunId, calls), waitpoints: waitTokens },
+          tools: { registry: agentTools, skills: skills().metadata(), runMagicaCalls: (calls) => runMagicaCalls(payload.agentRunId, calls),
+            waitpoints: waitTokens,
+            creditApprovalThreshold: env.CREDIT_APPROVAL_THRESHOLD,
+          },
         });
         return { result };
       } finally {

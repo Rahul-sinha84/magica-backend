@@ -63,6 +63,9 @@ export const WorkerEnvSchema = BaseEnvSchema.extend({
   // How many turns run at once; the rest wait in Trigger.dev's queue (and never fail for waiting). The free model's
   // rate limit is the real ceiling, so raising this mostly turns waiting into 429s. Read when the task is indexed.
   AGENT_CONCURRENCY_LIMIT: z.coerce.number().int().min(1).max(1000).default(20),
+  // A step whose paid tool calls cost more than this (in credits) waits for the user to approve the spend, unless an
+  // approved plan covers it. The default lets a single image (1,000,000) run without asking.
+  CREDIT_APPROVAL_THRESHOLD: z.coerce.number().int().min(0).max(1_000_000_000).default(2_000_000),
   // Magica's model API (Crop Image, GPT Image 2, Merge Videos). Only the worker calls it, so only the worker has the
   // key. The base URL is configuration with no default, so no environment's host is ever baked into the code.
   // a pasted key with a space or line break inside would only fail later, as a confusing 401

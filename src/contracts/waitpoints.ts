@@ -49,7 +49,7 @@ export const CreditCallSchema = z.object({
 });
 
 export const CreditPayloadSchema = z.object({
-  calls: z.array(CreditCallSchema).min(1).max(20),
+  calls: z.array(CreditCallSchema).min(1).max(100),
   totalCredits: z.int().min(0),
 });
 

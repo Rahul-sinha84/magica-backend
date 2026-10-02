@@ -33,6 +33,11 @@ export interface ToolStepDeps {
   waitFor?: (key: string) => WaitFor;
   /** Why the turn won't run this tool right now (plan mode before a plan is approved), or null. Asked once per call, in order. */
   refuse?: (tool: ToolDefinition) => string | null;
+  /**
+   * Spend approval: paid calls in one step costing more than `threshold` credits wait for the user to approve them,
+   * unless `covered` (an approved plan covers the turn's spend). Absent: no approval is asked for.
+   */
+  spendApproval?: { threshold: number; covered: boolean };
 }
 
 export interface ToolStepResult {
@@ -47,9 +52,14 @@ type Planned =
   | { kind: "inline"; tool: ToolDefinition; input: unknown }
   | { kind: "magica"; tool: ToolDefinition; input: unknown };
 
-type Outcome = { ok: true; output: unknown; durationMs: number; creditCost: number; tool: ToolDefinition; input: unknown } | { ok: false; message: string; durationMs?: number };
+// A failure's `message` is what the tool card shows; `forModel`, when the model needs it put differently, is what it reads.
+type Outcome = { ok: true; output: unknown; durationMs: number; creditCost: number; tool: ToolDefinition; input: unknown } | { ok: false; message: string; forModel?: string; durationMs?: number };
 
 const OUT_OF_CREDITS = "You don't have enough credits for this.";
+export const SPEND_DECLINED = "You declined this spend.";
+// the card speaks to the user; the model must not read "you declined" as something it did, nor try again on its own
+export const SPEND_DECLINED_FOR_MODEL = "The user declined this spend, so this call wasn't made and nothing was charged. Don't try it again unless the user asks; tell them what you would have done.";
+const NO_APPROVAL = "This spend needs the user's approval, and approvals aren't available right now.";
 
 /** Every http(s) link in a text, without trailing punctuation. */
 export function linksIn(text: string): string[] {
@@ -92,9 +102,26 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
     }),
   );
 
-  // 3. Magica tools: record each and reserve its credits, then run them all as one batch of child tasks.
+  // 3. Magica tools: record each and reserve its credits, then run them all as one batch of child tasks. If together
+  // they cost more than the approval threshold (and no approved plan covers it), the user approves the spend first; a
+  // declined spend fails those calls, charging nothing, and the model reads why.
   let outOfCredits = false;
-  const magicaIndexes = plans.flatMap((plan, i) => (plan.kind === "magica" ? [i] : []));
+  let magicaIndexes = plans.flatMap((plan, i) => (plan.kind === "magica" ? [i] : []));
+  const paid = magicaIndexes.flatMap((i) => {
+    const plan = plans[i];
+    const call = calls[i];
+    return plan?.kind === "magica" && call ? [{ toolCallId: keyOf(call), toolName: plan.tool.name, credits: plan.tool.creditCost }] : [];
+  });
+  const total = paid.reduce((sum, call) => sum + call.credits, 0);
+  const approval = deps.spendApproval;
+  if (approval && !approval.covered && paid.length > 0 && total > approval.threshold) {
+    const ask = deps.waitFor?.(`s${deps.step}-credit`);
+    const answer = ask ? await ask("credit", { calls: paid, totalCredits: total }) : null;
+    if (answer?.status !== "approved") {
+      for (const i of magicaIndexes) outcomes[i] = answer ? { ok: false, message: SPEND_DECLINED, forModel: SPEND_DECLINED_FOR_MODEL } : { ok: false, message: NO_APPROVAL };
+      magicaIndexes = [];
+    }
+  }
   const recorded: { index: number; invocationId: string }[] = [];
   for (const i of magicaIndexes) {
     const plan = plans[i];
@@ -144,7 +171,7 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.output) });
     } else {
       emit({ type: "tool-end", toolCallId: keyOf(call), status: "failed", errorMessage: outcome.message, ...(outcome.durationMs !== undefined && { durationMs: Math.max(0, Math.round(outcome.durationMs)) }) });
-      messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: outcome.message }) });
+      messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: outcome.forModel ?? outcome.message }) });
     }
   });
   // say explicitly that the tools are done (an update, delivered like any other), rather than only removing the field
