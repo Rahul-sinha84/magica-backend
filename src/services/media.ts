@@ -43,7 +43,8 @@ const dimension = (value: number | undefined) => (value !== undefined && Number.
 /**
  * Adds what a tool call made to the user's library, inside the transaction that completes the call (so it happens
  * exactly once). Anything the database would refuse (a link that isn't http(s)) is skipped rather than allowed to
- * fail the completion, which would also stop the charge.
+ * fail the completion, which would also stop the charge. Files are dated when the call finished, so media added later
+ * (the backfill) sits on the day it was made.
  */
 export async function addGeneratedMedia(tx: Tx, toolInvocationId: string, assets: readonly (ImageBlock | VideoBlock | AudioBlock)[]): Promise<number> {
   const usable = assets.flatMap((asset) => {
@@ -51,7 +52,7 @@ export async function addGeneratedMedia(tx: Tx, toolInvocationId: string, assets
     return url ? [{ ...asset, url }] : [];
   });
   if (usable.length === 0) return 0;
-  const invocation = await tx.toolInvocation.findUniqueOrThrow({ where: { id: toolInvocationId }, select: { agentRun: { select: { userId: true } } } });
+  const invocation = await tx.toolInvocation.findUniqueOrThrow({ where: { id: toolInvocationId }, select: { completedAt: true, agentRun: { select: { userId: true } } } });
   const { count } = await tx.mediaAsset.createMany({
     data: usable.map((asset) => ({
       userId: invocation.agentRun.userId,
@@ -64,6 +65,7 @@ export async function addGeneratedMedia(tx: Tx, toolInvocationId: string, assets
       height: dimension(asset.height),
       mimeType: asset.mimeType ?? null,
       toolInvocationId,
+      ...(invocation.completedAt && { createdAt: invocation.completedAt }),
     })),
   });
   return count;

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "#src/db/client.js";
 import { completeInvocation, createInvocation, endInvocation, InsufficientCreditsForTool, markDispatching, markRunning, turnToolCost } from "#src/services/toolInvocations.js";
+import { addGeneratedMedia } from "#src/services/media.js";
 import { finalizeRun } from "#src/services/runs.js";
 import { as } from "../helpers/app.js";
 import { activeTurn, fixtures, resetDb } from "../helpers/db.js";
@@ -128,6 +129,18 @@ describe("settling", () => {
       { userId: user.id, source: "GENERATED", type: "VIDEO", url: "https://a.test/2.mp4", prompt: null, model: null, width: null, height: null, toolInvocationId: invocation.id },
     ]);
     expect((await ledger(user.id)).filter((e) => e.type === "CHARGE")).toHaveLength(1);
+  });
+
+  it("dates the library entry when the call finished, so media added later (the backfill) keeps its day", async () => {
+    const { invocation } = await running();
+    await completeInvocation(invocation.id, { output: { ok: 1 }, durationMs: 10, assets: [{ type: "image", url: "https://a.test/now.png" }] });
+    const live = await prisma.toolInvocation.findUniqueOrThrow({ where: { id: invocation.id }, select: { completedAt: true } });
+    expect((await prisma.mediaAsset.findFirstOrThrow({ where: { url: "https://a.test/now.png" } })).createdAt).toEqual(live.completedAt);
+
+    const finished = new Date(Date.now() - 3 * 24 * 3_600_000);
+    await prisma.toolInvocation.update({ where: { id: invocation.id }, data: { completedAt: finished } });
+    await prisma.$transaction((tx) => addGeneratedMedia(tx, invocation.id, [{ type: "image", url: "https://a.test/old.png" }]));
+    expect((await prisma.mediaAsset.findFirstOrThrow({ where: { url: "https://a.test/old.png" } })).createdAt).toEqual(finished);
   });
 
   it("adds nothing for a call that was stopped before it completed", async () => {
