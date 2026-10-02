@@ -120,6 +120,11 @@ async function settle(id: string, type: WaitpointType, woken: { ok: true; output
   return prisma.waitpoint.findUnique({ where: { id } });
 }
 
+/** Whether the user has approved a plan in this run (plan mode: until then, tools that cost credits are refused). */
+export async function planApproved(runId: string): Promise<boolean> {
+  return (await prisma.waitpoint.count({ where: { agentRunId: runId, type: "PLAN", status: "APPROVED" } })) > 0;
+}
+
 /**
  * The turn's way to wait, one waitpoint at a time (tools in a step may run side by side, but the user answers one
  * question at a time). `key` names the asking: the same key gives the same waitpoint.

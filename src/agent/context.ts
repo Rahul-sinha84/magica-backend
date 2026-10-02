@@ -14,10 +14,20 @@ export interface HistoryMessage {
 
 const MEDIA_LABEL = { image: "image", video: "video", audio: "audio" } as const;
 
+const WAITPOINT_OUTCOME = { approved: "approved", changes_requested: "changes requested", rejected: "declined", expired: "expired without an answer", cancelled: "stopped", pending: "not answered" } as const;
+
+/** One line about a question the user was asked in that reply (a plan to approve, a spend to approve), and their answer. */
+function renderWaitpoint(block: Extract<ContentBlock, { type: "waitpoint" }>): string {
+  const outcome = WAITPOINT_OUTCOME[block.status];
+  const feedback = block.feedback ? `: ${block.feedback}` : "";
+  return block.waitpointType === "plan" ? `[Plan "${block.payload.title}" ${outcome}${feedback}]` : `[Spend of ${block.payload.totalCredits} credits ${outcome}${feedback}]`;
+}
+
 /**
  * What the model is told about an earlier reply. Its text (only if it finished: a failed or stopped reply's partial
  * text is unreliable), every image, video or audio it produced (so "crop the image" knows which one, even if the turn
- * failed later), and which tool calls failed and why. Thinking, usage and successful tool details are left out.
+ * failed later), which tool calls failed and why, and what the user answered when asked to approve something.
+ * Thinking, usage and successful tool details are left out.
  */
 export function renderReply(blocks: ContentBlock[], fallbackText: string | null, finished: boolean): string {
   const lines: string[] = [];
@@ -26,6 +36,7 @@ export function renderReply(blocks: ContentBlock[], fallbackText: string | null,
   for (const block of blocks) {
     if (block.type === "image" || block.type === "video" || block.type === "audio") lines.push(`[Generated ${MEDIA_LABEL[block.type]}: ${block.url}]`);
     else if (block.type === "tool_result" && block.isError) lines.push(`[${block.toolName} failed: ${block.errorMessage ?? "no reason given"}]`);
+    else if (block.type === "waitpoint") lines.push(renderWaitpoint(block));
   }
   return lines.join("\n");
 }

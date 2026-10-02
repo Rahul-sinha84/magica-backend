@@ -143,7 +143,36 @@ export const MergeVideosOutputSchema = z.object({
   }),
 });
 
-export const TOOL_NAMES = ["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"] as const;
+// ---- propose_plan (plan mode) ----
+
+/** The tools a plan's step may use: the ones that cost credits. */
+export const PLAN_STEP_TOOLS = ["gpt_image_2", "crop_image", "merge_videos"] as const;
+
+export const ProposePlanInputSchema = z.object({
+  title: z.string().trim().min(1).max(200).describe("A short name for the plan."),
+  overview: z.string().trim().min(1).max(2000).describe("What the plan will do, in a sentence or two."),
+  steps: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1).max(200).describe("What this step does."),
+        description: z.string().trim().max(1000).optional().describe("Details, such as the prompt or the crop."),
+        tool: z.enum(PLAN_STEP_TOOLS).optional().describe("The tool this step calls (one call per step); leave it out for a step without a tool."),
+      }),
+    )
+    .min(1)
+    .max(20)
+    .describe("The steps, in order."),
+  notes: z.string().trim().max(2000).optional().describe("Anything the user should know: assumptions, choices you made."),
+});
+
+// The model reads this to know what to do next; the card shows the status (and the feedback).
+export const ProposePlanOutputSchema = z.object({
+  status: z.enum(["approved", "changes_requested"]),
+  feedback: z.string().optional(),
+  instruction: z.string(),
+});
+
+export const TOOL_NAMES = ["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos", "propose_plan"] as const;
 export const ToolNameSchema = z.enum(TOOL_NAMES);
 
 /** How each tool is named in the UI (the tool card, the step list). */
@@ -153,6 +182,7 @@ export const TOOL_LABELS: Readonly<Record<(typeof TOOL_NAMES)[number], string>> 
   gpt_image_2: "GPT Image 2",
   crop_image: "Crop Image",
   merge_videos: "Merge Videos",
+  propose_plan: "Plan",
 };
 
 /**
@@ -180,3 +210,5 @@ export type CropImageInput = z.infer<typeof CropImageInputSchema>;
 export type CropImageOutput = z.infer<typeof CropImageOutputSchema>;
 export type MergeVideosInput = z.infer<typeof MergeVideosInputSchema>;
 export type MergeVideosOutput = z.infer<typeof MergeVideosOutputSchema>;
+export type ProposePlanInput = z.infer<typeof ProposePlanInputSchema>;
+export type ProposePlanOutput = z.infer<typeof ProposePlanOutputSchema>;

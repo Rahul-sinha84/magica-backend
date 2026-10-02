@@ -21,8 +21,8 @@ const messages = (schema: typeof CropImageInputSchema | typeof GptImage2InputSch
 };
 
 describe("tool names", () => {
-  it("are the five agent tools", () => {
-    expect(ToolNameSchema.options).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"]);
+  it("are the six agent tools", () => {
+    expect(ToolNameSchema.options).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos", "propose_plan"]);
   });
 });
 

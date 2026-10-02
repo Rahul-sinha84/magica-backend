@@ -121,6 +121,10 @@ export const MessageSchema = z.object({
   attachments: z.array(MessageAttachmentSchema).optional(),
 });
 
+// How the agent works on a message. plan: before using any tool that costs credits it proposes a plan and waits for
+// the user to approve it (Run All) or ask for changes. A retry keeps the mode of the turn it retries.
+export const RunModeSchema = z.enum(["default", "plan"]);
+
 // The text is stored exactly as typed (indentation and code blocks matter), so it is only checked for
 // being non-blank and NUL-free, never trimmed.
 export const SendMessageBodySchema = z.strictObject({
@@ -135,6 +139,7 @@ export const SendMessageBodySchema = z.strictObject({
     .max(MAX_ATTACHMENTS, { error: `A message can carry at most ${MAX_ATTACHMENTS} files.` })
     .refine((files) => new Set(files.map((file) => file.mediaAssetId)).size === files.length, { error: "Each file can be attached once." })
     .default([]),
+  mode: RunModeSchema.default("default"),
   // lower-cased, so the same id in a different case can't slip past the server's duplicate check
   clientMessageId: z
     .uuid()
@@ -173,6 +178,7 @@ export type VideoBlock = z.infer<typeof VideoBlockSchema>;
 export type AudioBlock = z.infer<typeof AudioBlockSchema>;
 export type UsageBlock = z.infer<typeof UsageBlockSchema>;
 export type SendMessageBody = z.infer<typeof SendMessageBodySchema>;
+export type RunMode = z.infer<typeof RunModeSchema>;
 export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
 
 // A retry answers the same question again as a new turn, so it is answered exactly like a send: the question (no new

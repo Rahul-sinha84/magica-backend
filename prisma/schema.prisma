@@ -91,6 +91,7 @@ model AgentRun {
   inputTokens        Int?
   outputTokens       Int?
   traceId            String
+  mode               RunMode   @default(DEFAULT) // PLAN: paid tools wait for an approved plan; a retry keeps it
   // the failed or cancelled run this one retries; unique, so retrying the same run twice gives back the same retry
   retryOfRunId       String?   @unique
   startedAt          DateTime?
@@ -308,6 +309,11 @@ enum ToolInvocationStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+enum RunMode {
+  DEFAULT
+  PLAN
 }
 
 enum WaitpointType {

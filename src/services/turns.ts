@@ -35,6 +35,7 @@ const violates = (error: unknown, constraint: string) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && constraintOf(error) === constraint;
 
 const runActive = () => new AppError("RUN_ACTIVE", "An agent is already running in this chat.");
+const RUN_MODE = { default: "DEFAULT", plan: "PLAN" } as const;
 
 /** A reply to a send that was already accepted: the same turn, never a second one. Null when there is no such turn. */
 async function replay(chatId: string, body: SendMessageBody, replayWaitMs: number): Promise<SentTurn | null> {
@@ -42,7 +43,7 @@ async function replay(chatId: string, body: SendMessageBody, replayWaitMs: numbe
   const find = () =>
     prisma.message.findFirst({
       where: { chatId, clientMessageId: body.clientMessageId },
-      include: { triggeredRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, triggerRunId: true } }, ...WITH_ATTACHMENTS },
+      include: { triggeredRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, triggerRunId: true, mode: true } }, ...WITH_ATTACHMENTS },
     });
 
   let existing = await find();
@@ -50,7 +51,8 @@ async function replay(chatId: string, body: SendMessageBody, replayWaitMs: numbe
   // the same id must mean the same message: anything else is a client bug, and quietly answering with the
   // earlier turn would hide it
   const sameFiles = existing.attachments.map((file) => file.mediaAssetId).join() === body.attachments.map((file) => file.mediaAssetId).join();
-  if (existing.content !== body.content || !sameFiles) {
+  const sameMode = !existing.triggeredRuns[0] || existing.triggeredRuns[0].mode === RUN_MODE[body.mode];
+  if (existing.content !== body.content || !sameFiles || !sameMode) {
     throw new AppError("VALIDATION_FAILED", "clientMessageId: That id was already used for a different message.", {
       fields: { clientMessageId: ["Already used for a different message."] },
     });
@@ -85,7 +87,7 @@ function createTurn(userId: string, chatId: string, body: SendMessageBody, trace
       data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
     });
     const run = await tx.agentRun.create({
-      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId },
+      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, mode: RUN_MODE[body.mode] },
     });
     await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold", idempotencyKey: holdKey(run.id), agentRunId: run.id });
 
@@ -210,7 +212,7 @@ class RetryAlreadyStarted extends Error {}
  * The new turn for a retry, written together or not at all. The chat row is locked first, so "is this still the chat's
  * latest turn?" cannot change underneath us: a send and a retry, or two retries, take turns instead of racing.
  */
-function createRetryTurn(userId: string, original: { id: string; chatId: string; triggerMessageId: string }, traceId: string) {
+function createRetryTurn(userId: string, original: { id: string; chatId: string; triggerMessageId: string; mode: "DEFAULT" | "PLAN" }, traceId: string) {
   const { chatId } = original;
   return prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Chat" WHERE id = ${chatId} FOR UPDATE`;
@@ -234,7 +236,7 @@ function createRetryTurn(userId: string, original: { id: string; chatId: string;
       data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
     });
     const run = await tx.agentRun.create({
-      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, retryOfRunId: original.id },
+      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, retryOfRunId: original.id, mode: original.mode },
     });
     await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold (retry)", idempotencyKey: holdKey(run.id), agentRunId: run.id });
     // a retry follows the same guidance as the attempt it retries: it starts with that run's loaded skills, text and all
@@ -255,7 +257,7 @@ export async function retryRun(
   { userId, runId, traceId }: { userId: string; runId: string; traceId: string },
   { dispatchTimeoutMs = DISPATCH_TIMEOUT_MS, replayWaitMs = REPLAY_WAIT_MS }: SendOptions = {},
 ): Promise<SentTurn> {
-  const original = await prisma.agentRun.findFirst({ where: { id: runId, userId }, select: { id: true, chatId: true, triggerMessageId: true } });
+  const original = await prisma.agentRun.findFirst({ where: { id: runId, userId }, select: { id: true, chatId: true, triggerMessageId: true, mode: true } });
   if (!original) throw replyGone(); // another user's run is "not found" too, so nothing leaks
   const chat = await requireChat(userId, original.chatId);
 

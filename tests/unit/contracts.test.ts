@@ -138,8 +138,13 @@ describe("CursorQuerySchema", () => {
 describe("SendMessageBodySchema", () => {
   const id = crypto.randomUUID();
 
-  it("parses a minimal body and defaults attachments", () => {
-    expect(SendMessageBodySchema.parse({ content: "Hello" })).toEqual({ content: "Hello", attachments: [] });
+  it("parses a minimal body and defaults attachments and the mode", () => {
+    expect(SendMessageBodySchema.parse({ content: "Hello" })).toEqual({ content: "Hello", attachments: [], mode: "default" });
+  });
+
+  it("takes plan mode, and nothing else as a mode", () => {
+    expect(SendMessageBodySchema.parse({ content: "Hello", mode: "plan" }).mode).toBe("plan");
+    for (const mode of ["PLAN", "auto", "", null]) expect(SendMessageBodySchema.safeParse({ content: "Hello", mode }).success).toBe(false);
   });
 
   it("keeps the text exactly as typed, including indentation and trailing newlines", () => {

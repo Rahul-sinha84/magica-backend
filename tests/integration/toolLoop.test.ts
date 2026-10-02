@@ -575,6 +575,6 @@ describe("thinking time and media placeholders", () => {
   it("tells the model not to write those lines", async () => {
     const { systemPrompt } = await import("#src/agent/prompt.js");
     const prompt = systemPrompt(new Date(0), { skills, tools: agentTools.functions().map((f) => ({ name: f.function.name, description: f.function.description })) });
-    expect(prompt).toMatch(/Never write those \[Generated …\] or \[Attached …\] lines in your reply/);
+    expect(prompt).toMatch(/Never write those \[Generated …\], \[Attached …\] or \[Plan …\] lines in your reply/);
   });
 });

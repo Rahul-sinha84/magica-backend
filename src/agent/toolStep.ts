@@ -31,6 +31,8 @@ export interface ToolStepDeps {
   checkpoint?: () => Promise<void>;
   /** Pauses the turn until the user answers; `key` names the asking within the run. Absent when the turn can't wait. */
   waitFor?: (key: string) => WaitFor;
+  /** Why the turn won't run this tool right now (plan mode before a plan is approved), or null. Asked once per call, in order. */
+  refuse?: (tool: ToolDefinition) => string | null;
 }
 
 export interface ToolStepResult {
@@ -60,7 +62,7 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
 
   // 1. Check every call before running any, and show each one starting.
   const plans: Planned[] = calls.map((call) => {
-    const plan = planCall(call, registry, deps.knownUrls);
+    const plan = planCall(call, registry, deps.knownUrls, deps.refuse);
     const tool = plan.kind === "error" ? undefined : plan.tool;
     const shown = tool && plan.kind !== "error" ? displayInput(tool, plan.input) : (sanitizeInput(call.input ?? {}) as Record<string, unknown>);
     emit({ type: "tool-start", toolCallId: keyOf(call), toolName: call.name || "unknown", toolInput: shown });
@@ -158,10 +160,12 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
 }
 
 /** Whether a call can run, and how; or why not, in words the model can act on. */
-function planCall(call: ToolCallEvent, registry: ToolRegistry, knownUrls: Set<string>): Planned {
+function planCall(call: ToolCallEvent, registry: ToolRegistry, knownUrls: Set<string>, refuse?: (tool: ToolDefinition) => string | null): Planned {
   if (call.malformed) return { kind: "error", message: `Invalid tool call: ${call.malformed}.` };
   const parsed = registry.parseInput(call.name, call.input ?? {});
   if (!parsed.ok) return { kind: "error", message: parsed.message };
+  const refused = refuse?.(parsed.tool);
+  if (refused) return { kind: "error", message: refused };
   const unknown = (parsed.tool.mediaUrls?.(parsed.input) ?? []).filter((url) => !knownUrls.has(url));
   if (unknown.length > 0) {
     return { kind: "error", message: `${unknown.length === 1 ? "This link doesn't" : "These links don't"} appear in the conversation: ${unknown.slice(0, 3).join(", ")}. Use the exact link from the conversation.` };

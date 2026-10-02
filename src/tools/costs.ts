@@ -6,4 +6,5 @@ export const TOOL_CREDIT_COSTS = {
   gpt_image_2: 1_000_000,
   crop_image: 200_000,
   merge_videos: 500_000,
+  propose_plan: 0,
 } as const satisfies Record<string, number>;

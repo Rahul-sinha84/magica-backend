@@ -570,7 +570,7 @@ describe("when the agent cannot be started", () => {
     trigger.dispatchHangs = true;
     const started = Date.now();
     await expect(
-      sendMessage({ userId: "u1", chatId: chat, body: { content: "Hangs", attachments: [] }, traceId: "t" }, { dispatchTimeoutMs: 150 }),
+      sendMessage({ userId: "u1", chatId: chat, body: { content: "Hangs", attachments: [], mode: "default" }, traceId: "t" }, { dispatchTimeoutMs: 150 }),
     ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
     expect(Date.now() - started).toBeLessThan(2_000);
     await expectUndone("u1", chat, { messages: 0, runs: 0, dispatches: 0 }, lastMessageAt);

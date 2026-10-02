@@ -11,8 +11,9 @@ import { ModelError, type ChatMessage, type ModelEvent, type StreamCallOptions, 
 import { finalizeRun, toJson } from "#src/services/runs.js";
 import { turnToolCost } from "#src/services/toolInvocations.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
-import type { ToolRegistry } from "#src/tools/registry.js";
-import { createWaiter, type WaitTokens } from "#src/waitpoints/wait.js";
+import type { ToolDefinition, ToolRegistry } from "#src/tools/registry.js";
+import { PROPOSE_PLAN } from "#src/tools/planTools.js";
+import { createWaiter, planApproved, type WaitTokens } from "#src/waitpoints/wait.js";
 
 export type TurnResult = "completed" | "failed" | "cancelled" | "skipped";
 
@@ -89,6 +90,27 @@ export function withoutMediaPlaceholders(blocks: ContentBlock[]): ContentBlock[]
   });
 }
 
+/**
+ * The tools a step may not run, and why (the model reads the reason and can act on it). In plan mode nothing that costs
+ * credits runs before the user has approved a plan, and only one plan is proposed at a time; outside plan mode there
+ * are no plans to propose. A new set of rules per step: it remembers the plan proposed earlier in the same step.
+ */
+function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition) => string | null {
+  let proposed = false;
+  return (tool) => {
+    if (tool.name === PROPOSE_PLAN) {
+      if (!planMode) return "propose_plan is only for plan mode. Do what the user asked directly.";
+      if (proposed) return "Propose one plan at a time, and wait for the answer to it.";
+      proposed = true;
+      return null;
+    }
+    if (planMode && !approved && tool.creditCost > 0) {
+      return `Plan mode: propose a plan with propose_plan and wait for the user to approve it before using ${tool.name}.`;
+    }
+    return null;
+  };
+}
+
 const withThinkingTime = (blocks: ContentBlock[], ms: number | undefined): ContentBlock[] => {
   const first = blocks.findIndex((block) => block.type === "thinking");
   if (ms === undefined || first < 0) return blocks;
@@ -162,13 +184,15 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
   };
 
   try {
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { triggerMessageId: true } });
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { triggerMessageId: true, mode: true } });
+    const planMode = run.mode === "PLAN";
     const history = await loadConversation(chatId, run.triggerMessageId);
     if (history.length === 0) throw new TurnError("CONTEXT_EMPTY", "I couldn't find your message. Please send it again.");
     const tools = deps.tools;
-    const offered = tools?.registry.functions() ?? [];
+    // propose_plan is only offered in plan mode
+    const offered = (tools?.registry.functions() ?? []).filter((tool) => planMode || tool.function.name !== PROPOSE_PLAN);
     const promptTools: PromptTools | undefined = tools && { skills: tools.skills, tools: offered.map((t) => ({ name: t.function.name, description: t.function.description })) };
-    const messages: ChatMessage[] = withSystemPrompt(history, new Date(now()), promptTools);
+    const messages: ChatMessage[] = withSystemPrompt(history, new Date(now()), promptTools, planMode ? "plan" : "default");
     // the only links a tool may use: ones that appear in the conversation, plus media the turn itself creates
     const knownUrls = new Set(history.flatMap((message) => linksIn(message.content)));
     const maxSteps = tools?.maxSteps ?? MAX_STEPS;
@@ -261,6 +285,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
       }
 
       usedTools = true;
+      const refuse = turnRules(planMode, planMode && (await planApproved(runId)));
       const result = await runToolStep(calls, {
         registry: tools.registry,
         runMagicaCalls: tools.runMagicaCalls,
@@ -283,6 +308,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
           await save();
         },
         ...(waiter && { waitFor: waiter }),
+        refuse,
       });
       if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("stopped", "AbortError");
       lastSave = now();

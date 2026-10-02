@@ -284,8 +284,8 @@ describe("secrets", () => {
 });
 
 describe("the registry", () => {
-  it("now offers all five tools, and refuses to run a media tool inline", async () => {
-    expect(agentTools.names()).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"]);
+  it("now has all six tools, and refuses to run a media tool inline", async () => {
+    expect(agentTools.names()).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos", "propose_plan"]);
     for (const name of ["gpt_image_2", "crop_image", "merge_videos"]) expect(agentTools.get(name)).toMatchObject({ kind: "magica" });
     const result = await agentTools.execute("crop_image", { image_url: IMG, crop: { x: 0, y: 0, width: 10, height: 10 } }, { agentRunId: "r", chatId: "c", userId: "u", log: silent, signal: new AbortController().signal });
     expect(result).toMatchObject({ ok: false, code: "TOOL_FAILED", message: "crop_image runs as a background task and can't be run inline." });
