@@ -75,11 +75,11 @@ export const CropImageInputSchema = z
     image_url: MediaUrlSchema.describe("The image to crop."),
     crop: z
       .object({
-        x: z.number().min(0),
-        y: z.number().min(0),
+        x: z.number().min(0).describe("Left edge of the rectangle."),
+        y: z.number().min(0).describe("Top edge of the rectangle."),
         width: z.number().positive(),
         height: z.number().positive(),
-        unit: z.enum(["percent", "pixel"]).default("percent"),
+        unit: z.enum(["percent", "pixel"]).default("percent").describe('percent (the default): every value is 0-100, a share of the image\'s size. pixel: whole pixels; set it whenever the values are pixels.'),
       })
       .optional()
       .describe("The rectangle to keep: top-left corner (x, y) and size, in percent of the image (default) or pixels."),
@@ -108,7 +108,7 @@ export const CropImageInputSchema = z
     if (input.crop) {
       const { x, y, width, height, unit } = input.crop;
       if (unit === "percent") {
-        if ([x, y, width, height].some((v) => v > 100)) ctx.addIssue({ code: "custom", path: ["crop"], message: "percent values must be between 0 and 100" });
+        if ([x, y, width, height].some((v) => v > 100)) ctx.addIssue({ code: "custom", path: ["crop"], message: 'percent values must be between 0 and 100; for pixel values, set "unit": "pixel"' });
         else rectangle(x, y, width, height, ["crop"]);
       } else if (![x, y, width, height].every(Number.isInteger)) {
         ctx.addIssue({ code: "custom", path: ["crop"], message: "pixel values must be whole numbers" });

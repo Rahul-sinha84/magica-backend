@@ -51,6 +51,8 @@ export const CreditCallSchema = z.object({
 export const CreditPayloadSchema = z.object({
   calls: z.array(CreditCallSchema).min(1).max(100),
   totalCredits: z.int().min(0),
+  // why it asks: a step costing more than this needs approval (the backend always sends it)
+  threshold: z.int().min(0).optional(),
 });
 
 // The payload depends on the kind, so both travel together.

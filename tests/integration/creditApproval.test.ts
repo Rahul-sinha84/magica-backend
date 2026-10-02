@@ -116,6 +116,7 @@ describe("spend approval", () => {
           { toolCallId: "s1-ImgCallB", toolName: "gpt_image_2", credits: IMAGE },
         ],
         totalCredits: 2 * IMAGE,
+        threshold: 1_500_000,
       },
     });
     expect(server.count("POST")).toBe(0); // nothing sent to Magica while it waits

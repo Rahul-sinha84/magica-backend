@@ -28,7 +28,9 @@ export const ActiveRunResponseSchema = z.object({
   realtimeTokenExpiresAt: IsoDateTimeSchema.nullable(),
   partialText: z.string().nullable(),
   partialBlocks: ContentBlocksSchema,
-  // the question the run is waiting on, if it is waiting (absent or null otherwise): a reload shows the card again
+  // the question the run is waiting on, if it is waiting (absent or null otherwise): a reload shows the card again.
+  // It is read after partialBlocks, so it is never older than them: partialBlocks showing a pending card with
+  // pendingWaitpoint null means that waitpoint closed in between (it was answered, expired or stopped).
   pendingWaitpoint: WaitpointSchema.nullable().optional(),
 });
 

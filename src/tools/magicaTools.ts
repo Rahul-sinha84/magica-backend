@@ -79,7 +79,8 @@ export function cropFields(input: CropImageInput): Record<string, number | undef
 
 export const cropImageTool = defineTool({
   name: "crop_image",
-  description: "Cut out part of an image (keep only a rectangle). Give the rectangle as crop {x, y, width, height, unit}. Load the image-editing skill first.",
+  description:
+    'Cut out part of an image (keep only a rectangle). Give the rectangle as crop {x, y, width, height}: in percent of the image (0-100) unless you add "unit": "pixel". Load the image-editing skill first.',
   input: CropImageInputSchema,
   output: CropImageOutputSchema,
   kind: "magica",

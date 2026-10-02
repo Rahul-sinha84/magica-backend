@@ -5,7 +5,7 @@ import { loadConversation } from "#src/agent/context.js";
 import { describeFailure, TurnError } from "#src/agent/outcomes.js";
 import type { AgentTurnPayload, MagicaToolPayload } from "#src/agent/payload.js";
 import { withSystemPrompt, type PromptTools } from "#src/agent/prompt.js";
-import { linksIn, runToolStep } from "#src/agent/toolStep.js";
+import { linksIn, runToolStep, type Refusal } from "#src/agent/toolStep.js";
 import { logger } from "#src/lib/logger.js";
 import { ModelError, type ChatMessage, type ModelEvent, type StreamCallOptions, type ToolCallEvent } from "#src/lib/openrouter.js";
 import { finalizeRun, toJson } from "#src/services/runs.js";
@@ -97,17 +97,21 @@ export function withoutMediaPlaceholders(blocks: ContentBlock[]): ContentBlock[]
  * credits runs before the user has approved a plan, and only one plan is proposed at a time; outside plan mode there
  * are no plans to propose. A new set of rules per step: it remembers the plan proposed earlier in the same step.
  */
-function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition) => string | null {
+function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition) => Refusal | null {
   let proposed = false;
+  // the tool card speaks to the user; the model is told what to do instead
   return (tool) => {
     if (tool.name === PROPOSE_PLAN) {
-      if (!planMode) return "propose_plan is only for plan mode. Do what the user asked directly.";
-      if (proposed) return "Propose one plan at a time, and wait for the answer to it.";
+      if (!planMode) return { message: "Plans are only used in plan mode.", forModel: "propose_plan is only for plan mode. Do what the user asked directly." };
+      if (proposed) return { message: "Only one plan at a time.", forModel: "Propose one plan at a time, and wait for the answer to it." };
       proposed = true;
       return null;
     }
     if (planMode && !approved && tool.creditCost > 0) {
-      return `Plan mode: propose a plan with propose_plan and wait for the user to approve it before using ${tool.name}.`;
+      return {
+        message: "Not run: plan mode needs an approved plan first.",
+        forModel: `Plan mode: propose a plan with propose_plan and wait for the user to approve it before using ${tool.name}.`,
+      };
     }
     return null;
   };

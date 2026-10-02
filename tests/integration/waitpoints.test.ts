@@ -166,6 +166,23 @@ describe("a turn waiting for the user's answer", () => {
     expect((await as("u1").get(`/api/chats/${chat.id}/active-run`)).body).toMatchObject({ run: null, pendingWaitpoint: null });
   });
 
+  it("reads the pending waitpoint after the partial reply, so it is never older than the blocks", async () => {
+    const { chat, turn, payload } = await setup();
+    const { done } = start(payload);
+    await fake.someoneWaiting();
+    const { id, triggerTokenId } = await waitpointOf(turn.run.id);
+    // the route makes the realtime token between its two reads: the user answers (in another tab) right then
+    vi.mocked(triggerModule.createRealtimeToken).mockImplementationOnce(async (triggerRunId: string) => {
+      await respondToWaitpoint("u1", id, { action: "approve" }, { completeToken: () => Promise.resolve() });
+      return { token: `token-for-${triggerRunId}`, expiresAt: new Date(Date.now() + 60 * 60_000) };
+    });
+    const body = ActiveRunResponseSchema.parse((await as("u1").get(`/api/chats/${chat.id}/active-run`)).body);
+    expect(body.partialBlocks.find((b) => b.type === "waitpoint")).toMatchObject({ waitpointId: id, status: "pending" });
+    expect(body.pendingWaitpoint).toBeNull(); // newer than the blocks: it says the card is closed
+    fake.complete(triggerTokenId, { action: "approve" });
+    expect(await done).toBe("completed");
+  });
+
   it("expires: the turn fails with WAITPOINT_EXPIRED (retryable), the card says so, and the credit hold is released", async () => {
     const { chat, turn, payload } = await setup();
     const { done, statuses } = start(payload);

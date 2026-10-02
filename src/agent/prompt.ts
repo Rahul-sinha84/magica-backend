@@ -40,6 +40,7 @@ export function systemPrompt(now: Date, available?: PromptTools, mode: RunMode =
       "",
       "## Plan mode",
       `The user turned on plan mode. Before using any tool that costs credits (${PLAN_STEP_TOOLS.join(", ")}), call propose_plan with your plan and wait for the answer. Loading a skill first is fine.`,
+      "Never write the plan out in your reply or ask the user to confirm it in text: they can only approve a plan you send with propose_plan (they see it as a card with Run All).",
       "Make one step per tool call, in order, naming the tool; the credits are added up for the user from the tools' prices.",
       "If the user asks for changes, revise the plan as they say and call propose_plan again. Once a plan is approved, carry it out without asking again, then say briefly what you did.",
       "If the request needs no paid tool, just answer it.",

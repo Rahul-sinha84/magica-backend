@@ -69,8 +69,7 @@ export function foldChunks(chunks: readonly AgentStreamChunk[]): ContentBlock[] 
       case "waitpoint-start": {
         const known = blocks.some((b) => b.type === "waitpoint" && b.waitpointId === chunk.waitpointId);
         if (known) break;
-        const { type: _type, ...fields } = chunk;
-        blocks.push({ type: "waitpoint", ...fields, status: "pending" });
+        blocks.push({ ...chunk, type: "waitpoint", status: "pending" });
         break;
       }
       case "waitpoint-end": {

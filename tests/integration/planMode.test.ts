@@ -173,9 +173,9 @@ describe("plan mode", () => {
     const { payload } = await setup();
     const { done, model, emitted } = start(payload, [generate, DONE]);
     expect(await done).toBe("completed");
-    const reason = "Plan mode: propose a plan with propose_plan and wait for the user to approve it before using gpt_image_2.";
-    expect(failures(emitted)).toEqual([reason]);
-    expect(toolMessages(model, 1)).toEqual([{ error: reason }]);
+    // the card speaks to the user; the model is told what to do instead
+    expect(failures(emitted)).toEqual(["Not run: plan mode needs an approved plan first."]);
+    expect(toolMessages(model, 1)).toEqual([{ error: "Plan mode: propose a plan with propose_plan and wait for the user to approve it before using gpt_image_2." }]);
     expect(await prisma.toolInvocation.count()).toBe(0);
     expect(await prisma.user.findUniqueOrThrow({ where: { id: "u1" }, select: { balance: true, held: true } })).toEqual({ balance: 10_000_000, held: 0 });
   });
@@ -189,7 +189,7 @@ describe("plan mode", () => {
     const waiting = await pendingPlan(turn.run.id);
     await answer(waiting.id, { action: "approve" });
     expect(await done).toBe("completed");
-    expect(failures(emitted)).toEqual([expect.stringContaining("Plan mode: propose a plan") as unknown]);
+    expect(failures(emitted)).toEqual(["Not run: plan mode needs an approved plan first."]);
     expect(batches).toHaveLength(1); // only the call made after the approval
   });
 
@@ -199,7 +199,7 @@ describe("plan mode", () => {
     const waiting = await pendingPlan(turn.run.id);
     await answer(waiting.id, { action: "approve" });
     expect(await done).toBe("completed");
-    expect(failures(emitted)).toEqual(["Propose one plan at a time, and wait for the answer to it."]);
+    expect(failures(emitted)).toEqual(["Only one plan at a time."]);
     expect(await prisma.waitpoint.count()).toBe(1);
   });
 
@@ -257,7 +257,8 @@ describe("outside plan mode", () => {
     const { done, model, emitted } = start(payload, [propose(FOX_PLAN), generate, DONE], { magicaUrl: server.url });
     expect(await done).toBe("completed");
     expect(offeredTo(model)).not.toContain("propose_plan");
-    expect(failures(emitted)).toEqual(["propose_plan is only for plan mode. Do what the user asked directly."]);
+    expect(failures(emitted)).toEqual(["Plans are only used in plan mode."]);
+    expect(toolMessages(model, 1)).toEqual([{ error: "propose_plan is only for plan mode. Do what the user asked directly." }]);
     expect(await prisma.waitpoint.count()).toBe(0);
     expect(await prisma.toolInvocation.count({ where: { status: "COMPLETED" } })).toBe(1);
   });
@@ -265,6 +266,7 @@ describe("outside plan mode", () => {
   it("tells the model about plan mode only in plan mode", () => {
     const tools = agentTools.functions().map((f) => ({ name: f.function.name, description: f.function.description }));
     expect(systemPrompt(new Date(0), { skills, tools }, "plan")).toMatch(/## Plan mode\nThe user turned on plan mode\. Before using any tool that costs credits/);
+    expect(systemPrompt(new Date(0), { skills, tools }, "plan")).toMatch(/Never write the plan out in your reply or ask the user to confirm it in text/);
     expect(systemPrompt(new Date(0), { skills, tools }, "default")).not.toMatch(/## Plan mode/);
     expect(systemPrompt(new Date(0), undefined, "plan")).not.toMatch(/## Plan mode/); // no tools, nothing to plan
   });

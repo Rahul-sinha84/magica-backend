@@ -36,6 +36,7 @@ export function runsRouter(sendLimit: RequestHandler): Router {
 
     const partialBlocks = ContentBlocksSchema.parse(Array.isArray(run.assistantMessage.contentBlocks) ? run.assistantMessage.contentBlocks : []);
     const access = run.triggerRunId ? await realtimeAccess(run.triggerRunId) : null;
+    // read after the partial reply (above), never before: the contract promises it is never older than partialBlocks
     const waiting = await pendingWaitpoint(run.id);
     res.json(
       ActiveRunResponseSchema.parse({
