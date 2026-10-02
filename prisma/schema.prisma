@@ -37,6 +37,7 @@ model User {
   uploads      Upload[]
   mediaAssets  MediaAsset[]
   apiKeys      ApiKey[]
+  idempotency  IdempotencyRecord[]
 }
 
 model Chat {
@@ -200,6 +201,26 @@ model ApiKey {
   @@index([userId, createdAt(sort: Desc)])
 }
 
+// A public-API request that started work under an Idempotency-Key: a repeat with the same body gets the stored answer
+// instead of starting the work again. PENDING while the first request is being handled; the answer is kept 24 hours.
+model IdempotencyRecord {
+  id             String            @id @default(cuid())
+  userId         String
+  scope          String // the endpoint, e.g. "POST /v1/messages": the same key may be used on different endpoints
+  key            String
+  requestHash    String // sha256 of the request body, to tell a repeat from a different request
+  status         IdempotencyStatus @default(PENDING)
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, key])
+  @@index([createdAt])
+}
+
 // Signed amount, from the point of view of the counter it changes:
 //   GRANT +n / REFUND +n  -> User.balance
 //   CHARGE -n             -> User.balance
@@ -334,6 +355,11 @@ enum ToolInvocationStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+enum IdempotencyStatus {
+  PENDING
+  DONE
 }
 
 enum RunMode {

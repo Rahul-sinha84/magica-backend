@@ -18,6 +18,7 @@ import { mediaRouter } from "#src/routes/media.js";
 import { uploadNotificationsRouter, uploadsRouter } from "#src/routes/uploads.js";
 import { waitpointsRouter } from "#src/routes/waitpoints.js";
 import { apiKeysRouter } from "#src/routes/apiKeys.js";
+import { v1Router } from "#src/routes/v1.js";
 import type { FetchAssembly } from "#src/lib/transloadit.js";
 import { healthRouter } from "#src/routes/health.js";
 
@@ -58,6 +59,8 @@ export function createApp({ log = logger, rateLimits, sendLimit, fetchAssembly }
   app.use("/api/media", mediaRouter);
   app.use("/api/waitpoints", waitpointsRouter);
   app.use("/api/api-keys", apiKeysRouter);
+  // the public API: its own way in (API keys or a session token), its own limits, errors that carry the trace id
+  app.use("/v1", v1Router({ sessionAuth: clerkAuth(), sendLimit: startsTurn }));
 
   app.use(notFound);
   app.use(errorHandler);

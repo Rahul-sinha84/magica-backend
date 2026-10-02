@@ -7,7 +7,7 @@ import { resetClerkMock } from "./clerkMock.js";
 import { resetTriggerMock } from "./triggerMock.js";
 import { assertTestDatabase } from "./guard.js";
 
-const TABLES = ["ApiKey", "Waitpoint", "Attachment", "Upload", "MediaAsset", "CreditLedger", "ToolInvocation", "RunSkill", "AgentRun", "Message", "Chat", "User"] as const;
+const TABLES = ["IdempotencyRecord", "ApiKey", "Waitpoint", "Attachment", "Upload", "MediaAsset", "CreditLedger", "ToolInvocation", "RunSkill", "AgentRun", "Message", "Chat", "User"] as const;
 
 export async function resetDb(): Promise<void> {
   assertTestDatabase(env.DATABASE_URL);

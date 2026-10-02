@@ -13,6 +13,7 @@ export interface LogContext {
   runId?: string;
   messageId?: string;
   waitpointId?: string;
+  apiKeyId?: string;
 }
 
 export const logContext = new AsyncLocalStorage<LogContext>();
