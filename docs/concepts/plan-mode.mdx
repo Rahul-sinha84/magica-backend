@@ -1,0 +1,67 @@
+---
+title: "Plan mode and approvals"
+description: "Approve a plan before anything is spent, and approve spends above a threshold."
+---
+
+Sometimes a run pauses for you: its `status` is `waiting` and `pendingWaitpoint` says what it needs. You answer with [`POST /v1/waitpoints/{id}/respond`](/api-reference/runs/answer-a-waitpoint), and the run carries on.
+
+## Plan mode
+
+Send with `"mode": "plan"` and the agent proposes a plan before using anything that costs credits:
+
+```bash
+curl -X POST "$MAGICA_API/v1/messages" \
+  -H "x-api-key: $MAGICA_API_KEY" -H "content-type: application/json" \
+  -d '{"content": "Make an image of a fox, then crop it to its top half.", "mode": "plan"}'
+```
+
+When the run is `waiting`, `pendingWaitpoint` holds the plan, with each step's cost taken from the tools' prices:
+
+```json Waitpoint
+{
+  "id": "cmur2hers00000tsbhvvriehm",
+  "runId": "cmur2h93600035tsb8nb1ctb7",
+  "type": "plan",
+  "status": "pending",
+  "payload": {
+    "title": "Fox in Snow Image and Crop",
+    "overview": "Generate an image of a fox sitting in the snow, then crop it to show only the top half.",
+    "steps": [
+      { "title": "Generate fox image", "tool": "gpt_image_2", "estimatedCredits": 1000000 },
+      { "title": "Crop to top half", "tool": "crop_image", "estimatedCredits": 200000 }
+    ],
+    "totalCredits": 1200000
+  },
+  "feedback": null,
+  "expiresAt": "2026-10-02T15:07:18.140Z",
+  "createdAt": "2026-10-02T14:37:18.465Z",
+  "resolvedAt": null
+}
+```
+
+Answer it:
+
+```bash
+# Run All
+curl -X POST "$MAGICA_API/v1/waitpoints/cmur2hers00000tsbhvvriehm/respond" \
+  -H "x-api-key: $MAGICA_API_KEY" -H "content-type: application/json" \
+  -d '{"action": "approve"}'
+
+# Request Changes (feedback is required)
+curl -X POST "$MAGICA_API/v1/waitpoints/cmur2hers00000tsbhvvriehm/respond" \
+  -H "x-api-key: $MAGICA_API_KEY" -H "content-type: application/json" \
+  -d '{"action": "request_changes", "feedback": "Make it a red fox."}'
+```
+
+After **Request Changes** the agent revises the plan and asks again (a new waitpoint). Once a plan is approved it carries it out without asking again.
+
+## Spend approval
+
+Outside plan mode, a single step whose paid tool calls cost more than the approval threshold (2,000,000 credits by default) waits for you first. `pendingWaitpoint.type` is `credit` and its payload lists the calls and their costs. Answer `approve` to run them, or `reject` to skip them: nothing is charged, and the agent is told you declined.
+
+## Things to know
+
+- A waitpoint **expires after 30 minutes**. The run then fails with `WAITPOINT_EXPIRED`; send a new message to continue.
+- Answering one that's already closed (answered elsewhere, expired, stopped) changes nothing and returns it as it stands, so a repeated click is harmless.
+- Stopping the run while it waits cancels the waitpoint too.
+- Allowed answers: a plan takes `approve` or `request_changes`; a spend takes `approve` or `reject`.

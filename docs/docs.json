@@ -1,0 +1,69 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Magica Clone API",
+  "description": "Send messages to the agent, follow runs, approve plans, run Magica tools and receive signed webhooks.",
+  "colors": {
+    "primary": "#2B2B2B",
+    "light": "#F4F4F4",
+    "dark": "#2B2B2B"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/runs",
+              "concepts/plan-mode",
+              "concepts/tools",
+              "concepts/completions",
+              "concepts/credits",
+              "concepts/idempotency"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "webhooks",
+              "errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API reference",
+        "openapi": "openapi.json"
+      }
+    ]
+  },
+  "api": {
+    "playground": {
+      "display": "interactive",
+      "proxy": false
+    },
+    "examples": {
+      "languages": [
+        "curl",
+        "javascript",
+        "python"
+      ]
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Rahul-sinha84/magica-backend"
+    }
+  }
+}

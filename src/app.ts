@@ -5,7 +5,7 @@ import { clerkAuth } from "#src/auth/clerk.js";
 import { requireUser } from "#src/auth/middleware.js";
 import { env } from "#src/env/server.js";
 import { logger } from "#src/lib/logger.js";
-import { corsMiddleware } from "#src/middleware/cors.js";
+import { corsMiddleware, publicApiCors } from "#src/middleware/cors.js";
 import { errorHandler, notFound } from "#src/middleware/errorHandler.js";
 import { createApiRateLimit, createMessageSendRateLimit, type ApiLimits } from "#src/middleware/rateLimit.js";
 import { requestContext } from "#src/middleware/requestContext.js";
@@ -35,7 +35,10 @@ export function createApp({
 
   app.use(requestContext(log));
   app.use(helmet());
-  app.use(corsMiddleware()); // answers preflight requests itself, before anything below can reject them
+  // each answers preflight requests itself, before anything below can reject them: the app's API only for the app,
+  // the public API for anyone (it never uses cookies)
+  app.use("/api", corsMiddleware());
+  app.use("/v1", publicApiCors());
 
   app.use("/api/health", healthRouter);
   // Transloadit's server-to-server reports: no user session, proven by an HMAC with our secret instead

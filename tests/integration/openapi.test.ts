@@ -19,10 +19,16 @@ const documented = (spec: typeof committed) =>
   Object.entries(spec.paths).flatMap(([path, operations]) => METHODS.filter((method) => method in operations).map((method) => `${method.toUpperCase()} ${path}`));
 
 describe("the OpenAPI document", () => {
-  it("is up to date with the contracts (run `pnpm openapi` after changing them)", () => {
+  it("is up to date with the contracts (run `pnpm docs:generate` after changing them)", () => {
     const { servers: _a, ...current } = built;
     const { servers: _b, ...file } = committed;
     expect(file).toEqual(current);
+  });
+
+  it("sends the hosted playground to the deployed API, with a local one to switch to", () => {
+    const servers = committed.servers as { url: string }[];
+    expect(servers[0]!.url).toMatch(/^https:\/\/(?!localhost)/);
+    expect(servers.map((server) => server.url)).toContain("http://localhost:3000");
   });
 
   it("describes every /v1 route, and nothing else", () => {

@@ -1,0 +1,156 @@
+---
+title: "Webhooks"
+description: "Signed events as runs start, finish and use tools."
+---
+
+Pass a `webhook` when you start work, and we'll `POST` signed events to your URL as it happens. It works on [`/v1/messages`](/api-reference/messages/send-a-message), [`/v1/chat/completions`](/api-reference/messages/create-a-chat-completion) and the [tool runs](/concepts/tools) (next to the tool's input).
+
+```json SendMessage
+{
+  "content": "Generate a small image of a cactus in a pot.",
+  "webhook": {
+    "url": "https://your-app.com/webhooks/magica",
+    "events": ["agent.completed", "agent.failed", "tool.completed"],
+    "metadata": { "orderId": "order_456" }
+  }
+}
+```
+
+- `url`: a public **https** address.
+- `events`: which events to send (all of them if you leave it out).
+- `metadata`: anything you want back on every event (up to 4 KB of JSON).
+
+The answer includes the **signing secret** for that URL:
+
+```json MessageAccepted
+{
+  "chatId": "cmurc2mgj0002p1itoqal3y3i",
+  "messageId": "cmurc2mgu0003p1itoembwwc5",
+  "runId": "cmurc2mh50005p1it30ev9kjy",
+  "status": "queued",
+  "webhook": { "signingSecret": "whsec_n7udOHXEGXGLy6+Nk0Nd8gqv7YD5lK2uZ2LhYpWTm2c=" }
+}
+```
+
+Store it in your secret manager. The same URL always gets the same secret, so registering again (on every deploy, say) is safe.
+
+## Events
+
+| Event | When | `success` |
+| --- | --- | --- |
+| `agent.started` | The agent started on the message. | `true` |
+| `agent.completed` | It finished. `data` has the reply's id, the model and `usage` (tokens and credits). | `true` |
+| `agent.failed` | It couldn't finish. `error` says why; `data.code` is the [stable reason](/errors#why-a-run-failed). | `false` |
+| `agent.canceled` | The run was stopped. | `false` |
+| `tool.completed` | A paid tool call finished. `data` has its input, credits, duration and what it made. | `true` |
+| `tool.failed` | A paid tool call failed. Nothing was charged. | `false` |
+
+Every event has the same shape:
+
+```json WebhookEvent
+{
+  "success": true,
+  "type": "tool.completed",
+  "runId": "cmurc2mh50005p1it30ev9kjy",
+  "data": {
+    "toolCallId": "cmurc3vzk0001uiit5bbfmn1p",
+    "tool": "gpt_image_2",
+    "status": "COMPLETED",
+    "input": { "mode": "text", "prompt": "A small cactus in a terracotta pot", "quality": "low" },
+    "credits": 1000000,
+    "durationMs": 47215,
+    "assets": [{ "type": "image", "url": "https://g.tlcdn.com/gen/bddc7f0bd66248919f445491e5f36e26.png", "mimeType": "image/png", "width": 1024, "height": 1024 }]
+  },
+  "metadata": { "orderId": "order_456" },
+  "error": null,
+  "createdAt": "2026-10-02T19:27:53.104Z"
+}
+```
+
+`runId` is the agent run, or for a [standalone tool run](/concepts/tools) the tool run's id.
+
+## Verify every delivery
+
+Each delivery is signed the way [Svix](https://www.svix.com) does it, with these headers:
+
+| Header | Meaning |
+| --- | --- |
+| `svix-id` | The event's id. The same on every retry of it: use it to ignore duplicates. |
+| `svix-timestamp` | When this attempt was sent, in seconds. |
+| `svix-signature` | `v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`, keyed with your secret. |
+
+<Tabs>
+  <Tab title="Node.js (svix)">
+    ```javascript
+    import express from "express";
+    import { Webhook } from "svix";
+
+    const app = express();
+    const wh = new Webhook(process.env.MAGICA_WEBHOOK_SECRET); // whsec_...
+
+    // the raw body: the signature covers the exact bytes we sent
+    app.post("/webhooks/magica", express.raw({ type: "application/json" }), (req, res) => {
+      try {
+        wh.verify(req.body, {
+          "svix-id": req.header("svix-id"),
+          "svix-timestamp": req.header("svix-timestamp"),
+          "svix-signature": req.header("svix-signature"),
+        });
+      } catch {
+        return res.status(400).send("Invalid signature");
+      }
+      res.status(200).send("OK"); // answer quickly, then do the work
+      const event = JSON.parse(req.body.toString("utf8"));
+      queue.add(event); // process idempotently, keyed by the svix-id header
+    });
+    ```
+  </Tab>
+  <Tab title="Python (svix)">
+    ```python
+    from svix.webhooks import Webhook, WebhookVerificationError
+
+    wh = Webhook(os.environ["MAGICA_WEBHOOK_SECRET"])
+
+    @app.post("/webhooks/magica")
+    async def magica_webhook(request: Request):
+        body = await request.body()
+        try:
+            wh.verify(body, dict(request.headers))
+        except WebhookVerificationError:
+            return Response(status_code=400, content="Invalid signature")
+        event = json.loads(body)
+        enqueue(event)
+        return {"ok": True}
+    ```
+  </Tab>
+  <Tab title="By hand (Node.js)">
+    ```javascript
+    import { createHmac, timingSafeEqual } from "node:crypto";
+
+    function verify(secret, headers, body) {
+      const id = headers["svix-id"];
+      const timestamp = headers["svix-timestamp"];
+      // refuse old messages (replays): five minutes either way
+      if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) return false;
+      const key = Buffer.from(secret.slice("whsec_".length), "base64");
+      const expected = createHmac("sha256", key).update(`${id}.${timestamp}.${body}`).digest();
+      return headers["svix-signature"].split(" ").some((part) => {
+        const [version, signature] = part.split(",");
+        const given = Buffer.from(signature ?? "", "base64");
+        return version === "v1" && given.length === expected.length && timingSafeEqual(given, expected);
+      });
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Delivery
+
+- Answer with a **2xx within 10 seconds**. Anything else (or no answer) is retried with backoff: about 1, 2, 4, 8 and 16 minutes later, then the delivery is given up.
+- An event is sent **once**: retries carry the same `svix-id`, so a receiver that saw it already can ignore the repeat.
+- Events are sent independently, so they can arrive out of order. Use `createdAt` (and the run's status) rather than arrival order.
+- Redirects aren't followed: point the webhook at the final URL.
+
+## Allowed addresses
+
+Webhooks only go to public **https** addresses. Private networks, this machine, link-local and other reserved addresses are refused when you register, and checked again on the address each delivery actually connects to, so a name that later points somewhere private is refused too.

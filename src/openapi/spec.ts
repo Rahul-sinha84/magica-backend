@@ -30,7 +30,7 @@ import {
 } from "#src/contracts/index.js";
 
 // The public API's OpenAPI 3.1 document, built from the same Zod contracts the server validates with, so the
-// reference can't drift from the code. `pnpm openapi` writes it to docs/openapi.json; a test fails when that file is
+// reference can't drift from the code. `pnpm docs:generate` writes it to docs/openapi.json; a test fails when that file is
 // out of date. Only /v1 is described: /api is the app's own API.
 
 type Json = Record<string, unknown>;
@@ -118,13 +118,23 @@ const EVENT_DESCRIPTIONS: Record<(typeof WEBHOOK_EVENTS)[number], string> = {
   "tool.failed": "A paid tool call failed: `error` says why. Nothing was charged.",
 };
 
+const WEBHOOK_TITLES: Record<(typeof WEBHOOK_EVENTS)[number], string> = {
+  "agent.started": "Agent started",
+  "agent.completed": "Agent completed",
+  "agent.failed": "Agent failed",
+  "agent.canceled": "Agent canceled",
+  "tool.completed": "Tool completed",
+  "tool.failed": "Tool failed",
+};
+
 /** One webhook event as OpenAPI 3.1 describes webhooks: what we POST to your URL, and how to verify it. */
 function webhookOperation(event: (typeof WEBHOOK_EVENTS)[number]): Json {
   const header = (name: string, description: string) => ({ name, in: "header", required: true, description, schema: { type: "string" } });
   return {
     post: {
-      summary: event,
-      description: `${EVENT_DESCRIPTIONS[event]} Verify the signature with the \`svix\` package and the \`whsec_…\` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated \`svix-id\` as the same event.`,
+      summary: WEBHOOK_TITLES[event],
+      tags: ["Webhooks"],
+      description: `\`${event}\`: ${EVENT_DESCRIPTIONS[event]} Verify the signature with the \`svix\` package and the \`whsec_…\` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated \`svix-id\` as the same event.`,
       parameters: [
         header("svix-id", "The event's id: the same on every retry of it."),
         header("svix-timestamp", "When this attempt was sent (seconds since the epoch)."),
@@ -136,7 +146,12 @@ function webhookOperation(event: (typeof WEBHOOK_EVENTS)[number]): Json {
   };
 }
 
-export function buildOpenApi({ serverUrl = "http://localhost:3000" }: { serverUrl?: string } = {}): Json {
+export interface Server {
+  url: string;
+  description?: string;
+}
+
+export function buildOpenApi({ servers = [{ url: "http://localhost:3000" }] }: { servers?: Server[] } = {}): Json {
   const tool = (name: string, input: string, what: string) =>
     operation(`Run ${name}`, `${what} Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll \`GET /v1/tools/runs/{runId}\`.`, {
       tags: ["Tools"],
@@ -154,13 +169,14 @@ export function buildOpenApi({ serverUrl = "http://localhost:3000" }: { serverUr
       description:
         "Send messages to the agent, read conversations, follow runs, answer approvals, and run Magica tools directly. Every response carries `x-api-version: 1` and `x-trace-id`; every error is `{ error, code, details?, traceId }`. Work that takes time starts at once and returns a run to poll.",
     },
-    servers: [{ url: serverUrl }],
+    servers,
     security: [{ ApiKey: [] }, { Bearer: [] }],
     tags: [
       { name: "Messages", description: "Talk to the agent." },
       { name: "Runs", description: "Follow, stop and answer runs." },
       { name: "Tools", description: "Run Magica tools directly." },
       { name: "Account", description: "Credits and media." },
+      { name: "Webhooks", description: "What we send to your webhook URL." },
     ],
     paths: {
       "/v1/messages": {

@@ -1,0 +1,88 @@
+---
+title: "Quickstart"
+description: "Create a key, send the agent a message, and read its answer."
+---
+
+<Steps>
+  <Step title="Create an API key">
+    In the app, open **API / MCP** in the sidebar, give the key a name and click **Create key**. Copy the key (`mgc_…`): it's shown once.
+
+    ```bash
+    export MAGICA_API_KEY="mgc_..."
+    export MAGICA_API="https://magica-backend-production.up.railway.app"   # or http://localhost:3000 locally
+    ```
+  </Step>
+
+  <Step title="Send a message">
+    The agent starts at once and you get the run to follow. Leave out `chatId` to start a new chat.
+
+    ```bash
+    curl -X POST "$MAGICA_API/v1/messages" \
+      -H "x-api-key: $MAGICA_API_KEY" \
+      -H "content-type: application/json" \
+      -H "Idempotency-Key: quickstart-1" \
+      -d '{"content": "Say hi in exactly five words."}'
+    ```
+
+    ```json MessageAccepted
+    {
+      "chatId": "cmur9kow10002sjit0s3zhzp8",
+      "messageId": "cmur9kow90003sjittinjyieg",
+      "runId": "cmur9kowe0005sjitcxr6ahrx",
+      "status": "queued"
+    }
+    ```
+  </Step>
+
+  <Step title="Poll the run">
+    Ask until `status` is `completed`, `failed` or `cancelled` (every second or two is plenty).
+
+    ```bash
+    curl "$MAGICA_API/v1/runs/cmur9kowe0005sjitcxr6ahrx" -H "x-api-key: $MAGICA_API_KEY"
+    ```
+
+    ```json RunResponse
+    {
+      "run": {
+        "id": "cmur9kowe0005sjitcxr6ahrx",
+        "chatId": "cmur9kow10002sjit0s3zhzp8",
+        "status": "completed",
+        "mode": "default",
+        "model": "cohere/north-mini-code:free",
+        "usage": { "inputTokens": 1613, "outputTokens": 229, "credits": 0 },
+        "error": null,
+        "reply": { "messageId": "cmur9kowc0004sjitutmz7hdh", "text": "Hi everyone, hope you're well.", "assets": [] },
+        "toolCalls": [],
+        "pendingWaitpoint": null,
+        "createdAt": "2026-10-02T17:55:48.878Z",
+        "startedAt": "2026-10-02T17:55:50.699Z",
+        "completedAt": "2026-10-02T17:55:52.998Z"
+      }
+    }
+    ```
+
+    The chat is in the app's sidebar too.
+  </Step>
+
+  <Step title="Get told instead of polling (optional)">
+    Pass a `webhook` and you'll receive signed events as the run starts, uses tools and finishes. The answer includes the secret to verify them with.
+
+    ```bash
+    curl -X POST "$MAGICA_API/v1/messages" \
+      -H "x-api-key: $MAGICA_API_KEY" \
+      -H "content-type: application/json" \
+      -d '{
+        "content": "Generate a small image of a cactus in a pot.",
+        "webhook": { "url": "https://your-app.com/webhooks/magica", "metadata": { "orderId": "order_456" } }
+      }'
+    ```
+
+    See [Webhooks](/webhooks) for the events and how to verify them.
+  </Step>
+</Steps>
+
+## Next
+
+- Ask for an image or a crop: the agent picks the tool itself. Each tool call shows in the run's `toolCalls` with what it made.
+- Want to approve before anything is spent? Send with `"mode": "plan"`. See [Plan mode and approvals](/concepts/plan-mode).
+- Already use a chat-completions client? Point it at [`/v1/chat/completions`](/concepts/completions).
