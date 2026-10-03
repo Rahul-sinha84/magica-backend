@@ -10,7 +10,7 @@ import {
   type GptImage2Input,
 } from "#src/contracts/index.js";
 import { MagicaError, resolveInput, type MagicaClient, type MagicaRun, type WaitOptions } from "#src/lib/magica.js";
-import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
+import { ESTIMATES, TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
 import { defineTool, type ToolDefinition } from "#src/tools/registry.js";
 
 // The three Magica tools. Each maps our contract (simple, lowercase choices the model can get right) onto the model's
@@ -30,6 +30,7 @@ export const gptImage2Tool = defineTool({
   output: GptImage2OutputSchema,
   kind: "magica",
   creditCost: TOOL_CREDIT_COSTS.gpt_image_2,
+  estimate: ESTIMATES.gpt_image_2,
   mediaUrls: (input) => input.image_urls ?? [],
   displayResult: (output) => {
     const [first] = output.images;
@@ -85,6 +86,7 @@ export const cropImageTool = defineTool({
   output: CropImageOutputSchema,
   kind: "magica",
   creditCost: TOOL_CREDIT_COSTS.crop_image,
+  estimate: ESTIMATES.crop_image,
   mediaUrls: (input) => [input.image_url],
   displayResult: (output) => ({ ...output.image }),
   assets: (output) => [{ type: "image" as const, url: output.image.url, model: "Crop Image", ...(output.image.width && { width: output.image.width }), ...(output.image.height && { height: output.image.height }) }],
@@ -107,6 +109,7 @@ export const mergeVideosTool = defineTool({
   output: MergeVideosOutputSchema,
   kind: "magica",
   creditCost: TOOL_CREDIT_COSTS.merge_videos,
+  estimate: ESTIMATES.merge_videos,
   mediaUrls: (input) => input.video_urls,
   displayResult: (output) => ({ ...output.video }),
   assets: (output) => [{ type: "video" as const, url: output.video.url, model: "Merge Videos", ...(output.video.mimeType && { mimeType: output.video.mimeType }), ...(output.video.width && { width: output.video.width }), ...(output.video.height && { height: output.video.height }) }],

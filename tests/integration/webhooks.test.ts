@@ -232,7 +232,7 @@ describe("events for a standalone tool run", () => {
     expect(delivery).toMatchObject({ type: "tool.completed" });
     await deliver(delivery!.id);
     const event = verify(accepted.webhook!.signingSecret, hook.received[0]!);
-    expect(event).toMatchObject({ success: true, type: "tool.completed", runId: accepted.runId, metadata: { job: 7 }, data: { toolCallId: accepted.runId, tool: "gpt_image_2", status: "COMPLETED", credits: 1_000_000, assets: [{ type: "image" }] } });
+    expect(event).toMatchObject({ success: true, type: "tool.completed", runId: accepted.runId, metadata: { job: 7 }, data: { toolCallId: accepted.runId, tool: "gpt_image_2", status: "COMPLETED", credits: 7644, assets: [{ type: "image" }] } }); // what Magica reported, not the estimate
     expect(JSON.stringify(event)).not.toContain("mg_hooked");
   });
 });

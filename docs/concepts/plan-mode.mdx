@@ -15,7 +15,7 @@ curl -X POST "$MAGICA_API/v1/messages" \
   -d '{"content": "Make an image of a fox, then crop it to its top half.", "mode": "plan"}'
 ```
 
-When the run is `waiting`, `pendingWaitpoint` holds the plan, with each step's cost taken from the tools' prices:
+When the run is `waiting`, `pendingWaitpoint` holds the plan, with each step priced at the tool's typical cost (each call is then charged what it really cost):
 
 ```json Waitpoint
 {
@@ -27,10 +27,10 @@ When the run is `waiting`, `pendingWaitpoint` holds the plan, with each step's c
     "title": "Fox in Snow Image and Crop",
     "overview": "Generate an image of a fox sitting in the snow, then crop it to show only the top half.",
     "steps": [
-      { "title": "Generate fox image", "tool": "gpt_image_2", "estimatedCredits": 1000000 },
-      { "title": "Crop to top half", "tool": "crop_image", "estimatedCredits": 200000 }
+      { "title": "Generate fox image", "tool": "gpt_image_2", "estimatedCredits": 68484 },
+      { "title": "Crop to top half", "tool": "crop_image", "estimatedCredits": 5000 }
     ],
-    "totalCredits": 1200000
+    "totalCredits": 73484
   },
   "feedback": null,
   "expiresAt": "2026-10-02T15:07:18.140Z",
@@ -57,7 +57,7 @@ After **Request Changes** the agent revises the plan and asks again (a new waitp
 
 ## Spend approval
 
-Outside plan mode, a single step whose paid tool calls cost more than the approval threshold (2,000,000 credits by default) waits for you first. `pendingWaitpoint.type` is `credit` and its payload lists the calls and their costs. Answer `approve` to run them, or `reject` to skip them: nothing is charged, and the agent is told you declined.
+Outside plan mode, a single step whose paid tool calls cost more than the approval threshold (600,000 credits by default, so any single image runs without asking) waits for you first. `pendingWaitpoint.type` is `credit` and its payload lists the calls and their costs. Answer `approve` to run them, or `reject` to skip them: nothing is charged, and the agent is told you declined.
 
 ## Things to know
 

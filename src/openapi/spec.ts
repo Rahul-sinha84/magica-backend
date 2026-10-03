@@ -153,7 +153,7 @@ export interface Server {
 
 export function buildOpenApi({ servers = [{ url: "http://localhost:3000" }] }: { servers?: Server[] } = {}): Json {
   const tool = (name: string, input: string, what: string) =>
-    operation(`Run ${name}`, `${what} Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll \`GET /v1/tools/runs/{runId}\`.`, {
+    operation(`Run ${name}`, `${what} Runs on its own, without a chat, and is charged like the agent's calls: its estimate is reserved when it starts; if it completes, it is charged once, exactly what Magica reports it used, and the rest is given back; otherwise all of it is given back. Poll \`GET /v1/tools/runs/{runId}\`.`, {
       tags: ["Tools"],
       parameters: [IDEMPOTENCY_HEADER],
       // the tool's input, with an optional webhook beside it

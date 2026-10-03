@@ -129,7 +129,7 @@ describe("plan mode", () => {
         { title: "Show the result", estimatedCredits: 0 },
       ],
       notes: "Square image.",
-      totalCredits: 1_200_000,
+      totalCredits: TOOL_CREDIT_COSTS.gpt_image_2 + TOOL_CREDIT_COSTS.crop_image,
     });
     expect(offeredTo(model)).toContain("propose_plan");
     expect(await prisma.toolInvocation.count()).toBe(0); // nothing paid before the answer
@@ -138,10 +138,12 @@ describe("plan mode", () => {
     expect(await done).toBe("completed");
     expect(toolMessages(model, 1)).toEqual([{ status: "approved", instruction: expect.stringContaining("Carry it out now") as unknown }]);
     expect(batches.map((batch) => batch.length)).toEqual([1, 1]); // the image, then the crop: one approval covers both
-    expect(await prisma.toolInvocation.findMany({ orderBy: { createdAt: "asc" }, select: { toolName: true, status: true } })).toEqual([
-      { toolName: "gpt_image_2", status: "COMPLETED" },
-      { toolName: "crop_image", status: "COMPLETED" },
+    expect(await prisma.toolInvocation.findMany({ orderBy: { createdAt: "asc" }, select: { toolName: true, status: true, creditCost: true } })).toEqual([
+      { toolName: "gpt_image_2", status: "COMPLETED", creditCost: 7644 },
+      { toolName: "crop_image", status: "COMPLETED", creditCost: 5000 },
     ]);
+    // the plan showed the estimates (an upper bound); the user pays what Magica reported, and nothing stays held
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: "u1" }, select: { balance: true, held: true } })).toEqual({ balance: 10_000_000 - 7644 - 5000, held: 0 });
     const blocks = await reply(turn.assistantMessage.id);
     expect(blocks.find((b) => b.type === "waitpoint")).toMatchObject({ waitpointType: "plan", status: "approved" });
     expect(blocks.filter((b) => b.type === "image")).toHaveLength(2);

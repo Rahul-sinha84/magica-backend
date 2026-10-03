@@ -677,7 +677,7 @@
     "/v1/tools/gpt-image-2": {
       "post": {
         "summary": "Run GPT Image 2",
-        "description": "Creates an image from a prompt, or edits images. Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll `GET /v1/tools/runs/{runId}`.",
+        "description": "Creates an image from a prompt, or edits images. Runs on its own, without a chat, and is charged like the agent's calls: its estimate is reserved when it starts; if it completes, it is charged once, exactly what Magica reports it used, and the rest is given back; otherwise all of it is given back. Poll `GET /v1/tools/runs/{runId}`.",
         "tags": [
           "Tools"
         ],
@@ -792,7 +792,7 @@
     "/v1/tools/crop-image": {
       "post": {
         "summary": "Run Crop Image",
-        "description": "Keeps a rectangle of an image. Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll `GET /v1/tools/runs/{runId}`.",
+        "description": "Keeps a rectangle of an image. Runs on its own, without a chat, and is charged like the agent's calls: its estimate is reserved when it starts; if it completes, it is charged once, exactly what Magica reports it used, and the rest is given back; otherwise all of it is given back. Poll `GET /v1/tools/runs/{runId}`.",
         "tags": [
           "Tools"
         ],
@@ -907,7 +907,7 @@
     "/v1/tools/merge-videos": {
       "post": {
         "summary": "Run Merge Videos",
-        "description": "Joins videos into one. Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll `GET /v1/tools/runs/{runId}`.",
+        "description": "Joins videos into one. Runs on its own, without a chat, and is charged like the agent's calls: its estimate is reserved when it starts; if it completes, it is charged once, exactly what Magica reports it used, and the rest is given back; otherwise all of it is given back. Poll `GET /v1/tools/runs/{runId}`.",
         "tags": [
           "Tools"
         ],

@@ -9,6 +9,7 @@ import { loadSkillRegistry } from "#src/skills/registry.js";
 import { SKILL_ROOTS } from "#src/skills/skills.js";
 import { reconcileRun, MAX_RUN_MS } from "#src/services/reconcile.js";
 import { findActiveRun } from "#src/services/runs.js";
+import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
 import { agentTools } from "#src/tools/index.js";
 import { runMagicaInvocation } from "#src/tools/magicaInvocation.js";
 import { activeTurn, fixtures, resetDb } from "../helpers/db.js";
@@ -23,6 +24,10 @@ afterEach(async () => {
 
 const IMG = "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png"; // what the gpt_text fixture returns
 const CROPPED = "https://g.tlcdn.com/gen/7a3cc3bbb328407abd6b35a494a4e632.png";
+// what the fixtures' Magica runs report they used: each call is charged exactly this (one credit each), not its estimate
+const IMAGE_COST = 7644;
+const CROP_COST = 5000;
+const ADMISSION = 100_000; // what a turn holds to start
 const silent = pino({ level: "silent" });
 const skills = loadSkillRegistry(SKILL_ROOTS, silent).metadata();
 
@@ -139,10 +144,14 @@ describe("a turn with tools offered", () => {
     const saved = await reply(turn.assistantMessage.id);
     expect(typesOf(saved.blocks)).toEqual(["tool_call", "tool_result", "text", "tool_call", "tool_result", "image", "text", "usage"]);
     expect(saved.content).toBe("Generating it now. Here is your sunset.");
-    expect(saved.blocks.at(-1)).toEqual({ type: "usage", inputTokens: 60, outputTokens: 18, model: "m/three", creditCost: 1_000_000 });
+    expect(saved.blocks.at(-1)).toEqual({ type: "usage", inputTokens: 60, outputTokens: 18, model: "m/three", creditCost: IMAGE_COST });
+    // the card shows what the image really cost, live and once saved, not the estimate held while it ran
+    expect(TOOL_CREDIT_COSTS.gpt_image_2).not.toBe(IMAGE_COST);
+    expect(emitted.find((c) => c.type === "tool-end" && c.toolCallId === "s2-Step2call")).toMatchObject({ status: "completed", creditCost: IMAGE_COST });
+    expect(saved.blocks.find((b) => b.type === "tool_call" && b.toolName === "gpt_image_2")).toMatchObject({ status: "completed", creditCost: IMAGE_COST });
     expect(await runRow(turn.run.id)).toMatchObject({ status: "COMPLETED", model: "m/three", inputTokens: 60, outputTokens: 18 });
-    expect(await credits()).toEqual({ balance: 9_000_000, held: 0 });
-    expect(await prisma.toolInvocation.findMany({ select: { toolCallId: true, status: true, creditCost: true } })).toEqual([{ toolCallId: "s2-Step2call", status: "COMPLETED", creditCost: 1_000_000 }]);
+    expect(await credits()).toEqual({ balance: 10_000_000 - IMAGE_COST, held: 0 });
+    expect(await prisma.toolInvocation.findMany({ select: { toolCallId: true, status: true, creditCost: true } })).toEqual([{ toolCallId: "s2-Step2call", status: "COMPLETED", creditCost: IMAGE_COST }]);
   });
 
   it("runs independent calls in one step together, once each, and feeds the results back in call order", async () => {
@@ -245,7 +254,7 @@ describe("the URL guard", () => {
     );
     expect(result).toBe("completed");
     expect(server.count("POST")).toBe(2);
-    expect(await credits()).toEqual({ balance: 10_000_000 - 1_200_000, held: 0 });
+    expect(await credits()).toEqual({ balance: 10_000_000 - IMAGE_COST - CROP_COST, held: 0 });
   });
 });
 
@@ -300,7 +309,9 @@ describe("limits", () => {
 
   it("stops safely when credits run out mid-turn: nothing more is sent, completed work stays charged", async () => {
     const server = await magica([completed("crop")]);
-    const { turn, payload } = await setup({ balance: 100_000 + 200_000 + 500_000, question: `Crop ${IMG}, then make a new image` });
+    // enough to start and to hold the crop's estimate; after the crop is paid, too little for the image's estimate
+    const balance = ADMISSION + TOOL_CREDIT_COSTS.crop_image + TOOL_CREDIT_COSTS.gpt_image_2 - 10_000;
+    const { turn, payload } = await setup({ balance, question: `Crop ${IMG}, then make a new image` });
     const { result } = await run(
       payload,
       [
@@ -313,7 +324,7 @@ describe("limits", () => {
     expect(result).toBe("failed");
     expect(await runRow(turn.run.id)).toMatchObject({ status: "FAILED", errorCode: "INSUFFICIENT_CREDITS" });
     expect(server.count("POST")).toBe(1); // only the crop
-    expect(await credits()).toEqual({ balance: 800_000 - 200_000, held: 0 }); // the crop is paid for, nothing else held
+    expect(await credits()).toEqual({ balance: balance - CROP_COST, held: 0 }); // the crop is paid for, nothing else held
     const saved = await reply(turn.assistantMessage.id);
     expect(saved.blocks.find((b) => b.type === "tool_result" && b.toolName === "gpt_image_2")).toMatchObject({ isError: true, errorMessage: "You don't have enough credits for this." });
     expect(saved.blocks.some((b) => b.type === "image" && b.url === CROPPED)).toBe(true);
@@ -321,10 +332,11 @@ describe("limits", () => {
 
   it("sends none of a step it can't pay for in full, giving back what it reserved for it", async () => {
     const server = await magica([completed("crop")]);
-    const { payload } = await setup({ balance: 100_000 + 1_000_000, question: `Crop ${IMG} and draw a fox` });
+    const balance = ADMISSION + TOOL_CREDIT_COSTS.gpt_image_2; // the image's estimate fits, the crop's doesn't
+    const { payload } = await setup({ balance, question: `Crop ${IMG} and draw a fox` });
     await run(payload, [[toolCall("gpt_image_2", { mode: "text", prompt: "A fox" }, "Affordabl"), toolCall("crop_image", { image_url: IMG, crop: { x: 0, y: 0, width: 50, height: 50 } }, "NotAfford"), finished()]], { magicaUrl: server.url });
     expect(server.count("POST")).toBe(0);
-    expect(await credits()).toEqual({ balance: 1_100_000, held: 0 });
+    expect(await credits()).toEqual({ balance, held: 0 });
     expect(await prisma.toolInvocation.findMany({ select: { status: true, errorMessage: true } })).toEqual([{ status: "CANCELLED", errorMessage: "Stopped: not enough credits." }]);
   });
 });
@@ -398,7 +410,7 @@ describe("stopping and recovery", () => {
     expect(result).toBe("completed");
     expect(await runRow(turn.run.id)).toMatchObject({ status: "COMPLETED" });
     expect((await reply(turn.assistantMessage.id)).blocks.some((b) => b.type === "image")).toBe(true);
-    expect(await credits()).toEqual({ balance: 9_000_000, held: 0 });
+    expect(await credits()).toEqual({ balance: 10_000_000 - IMAGE_COST, held: 0 });
   });
 
   it("still fails as empty when the model says nothing and no tool ran", async () => {
@@ -417,7 +429,7 @@ describe("stopping and recovery", () => {
     expect(result).toBe("failed");
     expect(await runRow(turn.run.id)).toMatchObject({ status: "FAILED", errorCode: "MODEL_INTERRUPTED" });
     expect((await reply(turn.assistantMessage.id)).blocks.some((b) => b.type === "image")).toBe(true);
-    expect(await credits()).toEqual({ balance: 9_000_000, held: 0 }); // the image was made, so it stays paid for
+    expect(await credits()).toEqual({ balance: 10_000_000 - IMAGE_COST, held: 0 }); // the image was made, so it stays paid for
   });
 
   it("ends a turn with only tool results (no final text) as completed, not as an empty answer", async () => {
@@ -510,7 +522,7 @@ describe("what the tool card shows", () => {
     const server = await magica([completed("crop")]);
     const { payload } = await setup({ question: `Crop ${IMG}` });
     const { emitted, model } = await run(payload, [[toolCall("crop_image", { image_url: IMG, crop: { x: 0, y: 0, width: 100, height: 50 } }, "Display01"), finished()], [text("ok"), finished()]], { magicaUrl: server.url });
-    expect(emitted.find((c) => c.type === "tool-end")).toMatchObject({ status: "completed", creditCost: 200_000, result: { url: CROPPED, width: 1024, height: 512 } });
+    expect(emitted.find((c) => c.type === "tool-end")).toMatchObject({ status: "completed", creditCost: CROP_COST, result: { url: CROPPED, width: 1024, height: 512 } });
     expect(JSON.parse((model.calls[1]?.messages.at(-1) as { content: string }).content)).toEqual({ image: { url: CROPPED, width: 1024, height: 512 } });
   });
 });

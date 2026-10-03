@@ -4,7 +4,7 @@ import type { MagicaToolPayload } from "#src/agent/payload.js";
 import type { ChatMessage, ToolCallEvent } from "#src/lib/openrouter.js";
 import { createInvocation, endInvocation, InsufficientCreditsForTool } from "#src/services/toolInvocations.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
-import { displayInput, displayResult, sanitizeInput, type ToolDefinition, type ToolRegistry, type WaitFor } from "#src/tools/registry.js";
+import { displayInput, displayResult, estimateFor, sanitizeInput, type ToolDefinition, type ToolRegistry, type WaitFor } from "#src/tools/registry.js";
 
 // One step's tool calls: check each, run them (inline tools at once, Magica tools as one batch of durable child tasks),
 // stream their progress, and turn their outcomes into the messages the model reads next. Results always go back in
@@ -119,7 +119,7 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
   const paid = magicaIndexes.flatMap((i) => {
     const plan = plans[i];
     const call = calls[i];
-    return plan?.kind === "magica" && call ? [{ toolCallId: keyOf(call), toolName: plan.tool.name, credits: plan.tool.creditCost }] : [];
+    return plan?.kind === "magica" && call ? [{ toolCallId: keyOf(call), toolName: plan.tool.name, credits: estimateFor(plan.tool, plan.input) }] : [];
   });
   const total = paid.reduce((sum, call) => sum + call.credits, 0);
   const approval = deps.spendApproval;
@@ -141,7 +141,7 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
       continue;
     }
     try {
-      const invocation = await createInvocation({ agentRunId: deps.agentRunId, userId: deps.userId, toolCallId: keyOf(call), toolName: plan.tool.name, input: plan.input, creditCost: plan.tool.creditCost });
+      const invocation = await createInvocation({ agentRunId: deps.agentRunId, userId: deps.userId, toolCallId: keyOf(call), toolName: plan.tool.name, input: plan.input, creditCost: estimateFor(plan.tool, plan.input) });
       recorded.push({ index: i, invocationId: invocation.id });
     } catch (error) {
       if (!(error instanceof InsufficientCreditsForTool)) throw error;
@@ -162,7 +162,7 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
       const result = results[n];
       if (!plan || plan.kind !== "magica") return;
       outcomes[index] = result?.status === "COMPLETED"
-        ? { ok: true, output: result.output, durationMs: result.durationMs, creditCost: plan.tool.creditCost, tool: plan.tool, input: plan.input }
+        ? { ok: true, output: result.output, durationMs: result.durationMs, creditCost: result.creditCost, tool: plan.tool, input: plan.input }
         : { ok: false, message: result?.message ?? "The tool stopped unexpectedly." };
     });
   }

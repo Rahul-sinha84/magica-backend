@@ -62,7 +62,7 @@ Everything lives in `.env.local`; `.env.example` lists each variable with a comm
 | `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` | worker | |
 | `MAGICA_API_KEY`, `MAGICA_BASE_URL` | worker | The Magica model API (`https://inference.magica.com`). Only the worker calls it. |
 | `AGENT_CONCURRENCY_LIMIT` | worker | Turns that run at once (default 20); the rest wait in the queue. Read when the task is indexed, so set it in the Trigger.dev environment too. |
-| `CREDIT_APPROVAL_THRESHOLD` | worker | A step whose paid tool calls cost more than this asks for approval first (default 2,000,000, so one image runs without asking). |
+| `CREDIT_APPROVAL_THRESHOLD` | worker | A step whose paid tool calls are estimated above this asks for approval first (default 600,000: any single image runs without asking). |
 | `TRIGGER_PROJECT_REF` | `trigger.config.ts` | |
 | `TEST_DATABASE_URL` | tests | Defaults to `magica_test` on the local container. |
 
@@ -201,7 +201,7 @@ CHECK constraints keep balances, holds and charges from going negative, and keep
 3. **Run.** The worker claims the run (`PENDING` → `RUNNING`) and builds the context (the conversation, attachments as links, and the skills index). Then it loops for up to 10 steps:
    - **Stream.** It streams the model's text as chunks on the `chunks` stream, and saves the partial reply about once a second.
    - **Inline tools.** `load_skill`, `read_skill_asset` and `propose_plan` run inside the turn.
-   - **Paid tools.** Magica calls run together as one batch of `magica-tool` child tasks. Each holds its price first; it is charged once if it completes and released otherwise.
+   - **Paid tools.** Magica calls run together as one batch of `magica-tool` child tasks. Each holds its estimate first; if it completes it is charged once, exactly what Magica reports it used (1:1), and the rest is released; otherwise all of it is released.
    - **Waits.**
      - In plan mode, paid tools are refused until a plan is approved: the agent calls `propose_plan`, and the turn waits on a waitpoint.
      - A step costing more than `CREDIT_APPROVAL_THRESHOLD` also waits, unless an approved plan covers it.
@@ -247,7 +247,7 @@ While it runs, the run's metadata follows the required status model: `thinking` 
 
 ### Credits
 - **Every balance change is a ledger row in the same transaction,** with a unique idempotency key, so nothing is charged or released twice.
-- **A turn holds a small admission amount; each paid call holds its own price.** The price is charged once on success and released on failure, stop or doubt. Model calls cost nothing (the free router has no price).
+- **A turn holds a small admission amount; each paid call holds an estimate, then pays its real cost.** The estimate is worked out from the call's input with Magica's published prices (`src/tools/costs.ts`: GPT Image 2 by quality and size, Crop Image flat, Merge Videos per minute), and is used for the hold and the spend approval; a plan prices its steps at each tool's typical cost. On success the call is charged exactly Magica's reported `creditUsed`, one app credit per Magica credit, and the rest of the hold is released. A call that costs more than its estimate is charged in full from the user's available credits, never below zero. If Magica reports no cost, the estimate is charged. On failure, stop or doubt, nothing is charged. Model calls cost nothing (the free router has no price).
 
 ### Public API and webhooks
 - **API keys:** `mgc_` plus 43 random base64url characters; only a SHA-256 hash is stored. They're labelled, limited to 10 active per user, with per-minute and per-day limits (60 and 1,000 by default) and an optional expiry. Revoked or expired keys stop working at once.
@@ -371,7 +371,7 @@ In the Trigger.dev dashboard, set the **Production** environment's variables:
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | your key; `openrouter/free` |
 | `MAGICA_API_KEY`, `MAGICA_BASE_URL` | your key; `https://inference.magica.com` |
 | `WEBHOOK_SECRET_KEY` | the same value as the API's |
-| `AGENT_CONCURRENCY_LIMIT`, `CREDIT_APPROVAL_THRESHOLD` | optional; `20` and `2000000` by default |
+| `AGENT_CONCURRENCY_LIMIT`, `CREDIT_APPROVAL_THRESHOLD` | optional; `20` and `600000` by default |
 | `NODE_ENV`, `LOG_LEVEL` | `production`, `info` |
 
 Then deploy from this repo with `pnpm trigger:deploy`, which uses the pinned CLI and reads `TRIGGER_PROJECT_REF` from `.env.local`; run `pnpm exec trigger login` first if needed. Don't use `trigger.dev@latest`. The dashboard should then list `agent-turn`, `magica-tool`, `deliver-webhook` and the `webhook-sweeper` schedule. `pnpm exec trigger deploy --dry-run` builds the same bundle without deploying it.
