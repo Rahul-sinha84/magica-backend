@@ -44,6 +44,8 @@ export interface ToolStepDeps {
 export interface Refusal {
   message: string;
   forModel?: string;
+  /** No card at all: the model's misstep, not a step of the work (the model still reads why). */
+  hidden?: boolean;
 }
 
 export interface ToolStepResult {
@@ -54,7 +56,7 @@ export interface ToolStepResult {
 }
 
 type Planned =
-  | { kind: "error"; message: string; forModel?: string }
+  | { kind: "error"; message: string; forModel?: string; hidden?: boolean }
   | { kind: "inline"; tool: ToolDefinition; input: unknown }
   | { kind: "magica"; tool: ToolDefinition; input: unknown };
 
@@ -76,12 +78,13 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
   const { registry, emit, setStatus, now, log } = deps;
   const keyOf = (call: ToolCallEvent) => `s${deps.step}-${call.id}`;
 
-  // 1. Check every call before running any, and show each one starting.
+  // 1. Check every call before running any, and show each one starting (except a hidden refusal, which shows nothing).
+  const hidden = (plan: Planned | undefined) => plan?.kind === "error" && plan.hidden === true;
   const plans: Planned[] = calls.map((call) => {
     const plan = planCall(call, registry, deps.knownUrls, deps.refuse);
     const tool = plan.kind === "error" ? undefined : plan.tool;
     const shown = tool && plan.kind !== "error" ? displayInput(tool, plan.input) : (sanitizeInput(call.input ?? {}) as Record<string, unknown>);
-    emit({ type: "tool-start", toolCallId: keyOf(call), toolName: call.name || "unknown", toolInput: shown });
+    if (!hidden(plan)) emit({ type: "tool-start", toolCallId: keyOf(call), toolName: call.name || "unknown", toolInput: shown });
     return plan;
   });
   const firstRunnable = plans.findIndex((plan) => plan.kind !== "error");
@@ -176,7 +179,7 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
       }
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.output) });
     } else {
-      emit({ type: "tool-end", toolCallId: keyOf(call), status: "failed", errorMessage: outcome.message, ...(outcome.durationMs !== undefined && { durationMs: Math.max(0, Math.round(outcome.durationMs)) }) });
+      if (!hidden(plans[i])) emit({ type: "tool-end", toolCallId: keyOf(call), status: "failed", errorMessage: outcome.message, ...(outcome.durationMs !== undefined && { durationMs: Math.max(0, Math.round(outcome.durationMs)) }) });
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: outcome.forModel ?? outcome.message }) });
     }
   });

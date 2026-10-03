@@ -96,8 +96,8 @@ export function withoutMediaPlaceholders(blocks: ContentBlock[]): ContentBlock[]
 
 /**
  * The tools a step may not run, and why (the model reads the reason and can act on it). In plan mode nothing that costs
- * credits runs before the user has approved a plan, and only one plan is proposed at a time; outside plan mode there
- * are no plans to propose. A new set of rules per step: it remembers the plan proposed earlier in the same step.
+ * credits runs before the user has approved a plan (such an attempt leaves no card), and only one plan is proposed at a
+ * time; outside plan mode there are no plans to propose. A new set of rules per step: it remembers the plan proposed earlier in the same step.
  */
 function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition) => Refusal | null {
   let proposed = false;
@@ -110,9 +110,11 @@ function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition)
       return null;
     }
     if (planMode && !approved && tool.creditCost > 0) {
+      // the model jumped ahead of the plan: the user never sees the attempt (nothing ran, nothing was charged)
       return {
         message: "Not run: plan mode needs an approved plan first.",
         forModel: `Plan mode: propose a plan with propose_plan and wait for the user to approve it before using ${tool.name}.`,
+        hidden: true,
       };
     }
     return null;

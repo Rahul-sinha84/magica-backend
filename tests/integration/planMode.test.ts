@@ -111,6 +111,7 @@ const toolMessages = (model: ReturnType<typeof fakeModelSteps>, step: number) =>
 const offeredTo = (model: ReturnType<typeof fakeModelSteps>, step = 0) => model.calls[step]?.options?.tools?.map((t) => t.function.name);
 const reply = async (id: string) => ContentBlocksSchema.parse((await prisma.message.findUniqueOrThrow({ where: { id } })).contentBlocks);
 const failures = (emitted: AgentStreamChunk[]) => emitted.flatMap((c) => (c.type === "tool-end" && c.status === "failed" ? [c.errorMessage] : []));
+const cardsFor = (emitted: AgentStreamChunk[], toolName: string) => emitted.filter((c) => c.type === "tool-start" && c.toolName === toolName);
 
 describe("plan mode", () => {
   it("proposes, waits for Run All, then carries the whole plan out: estimates come from the tools' prices", async () => {
@@ -170,12 +171,14 @@ describe("plan mode", () => {
   });
 
   it("refuses a paid tool before a plan is approved, with a reason the agent can act on, and charges nothing", async () => {
-    const { payload } = await setup();
+    const { turn, payload } = await setup();
     const { done, model, emitted } = start(payload, [generate, DONE]);
     expect(await done).toBe("completed");
-    // the card speaks to the user; the model is told what to do instead
-    expect(failures(emitted)).toEqual(["Not run: plan mode needs an approved plan first."]);
+    // the model is told what to do instead; the user never sees the attempt (no card, no "1 failed")
     expect(toolMessages(model, 1)).toEqual([{ error: "Plan mode: propose a plan with propose_plan and wait for the user to approve it before using gpt_image_2." }]);
+    expect(cardsFor(emitted, "gpt_image_2")).toEqual([]);
+    expect(failures(emitted)).toEqual([]);
+    expect((await reply(turn.assistantMessage.id)).filter((b) => b.type === "tool_call" || b.type === "tool_result")).toEqual([]);
     expect(await prisma.toolInvocation.count()).toBe(0);
     expect(await prisma.user.findUniqueOrThrow({ where: { id: "u1" }, select: { balance: true, held: true } })).toEqual({ balance: 10_000_000, held: 0 });
   });
@@ -189,8 +192,12 @@ describe("plan mode", () => {
     const waiting = await pendingPlan(turn.run.id);
     await answer(waiting.id, { action: "approve" });
     expect(await done).toBe("completed");
-    expect(failures(emitted)).toEqual(["Not run: plan mode needs an approved plan first."]);
     expect(batches).toHaveLength(1); // only the call made after the approval
+    // the early call left no trace for the user: one image card (the approved one), completed, and no failure
+    expect(failures(emitted)).toEqual([]);
+    expect(cardsFor(emitted, "gpt_image_2").map((c) => c.type === "tool-start" && c.toolCallId.endsWith("-GenCall1"))).toEqual([true]);
+    const calls = (await reply(turn.assistantMessage.id)).filter((b) => b.type === "tool_call" && b.toolName === "gpt_image_2");
+    expect(calls.map((b) => b.type === "tool_call" && [b.toolName, b.status])).toEqual([["gpt_image_2", "completed"]]);
   });
 
   it("takes one plan at a time: a second plan in the same step is refused", async () => {
