@@ -43,8 +43,10 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   output: z.ZodType<TOutput, unknown>;
   /** inline tools run inside the turn; magica tools run as durable child tasks */
   kind: "inline" | "magica";
-  /** Credits one successful call costs. */
+  /** The tool's typical cost in credits (0 for free tools): a plan's estimate, and what marks a tool as paid. */
   creditCost: number;
+  /** What a call with this input will cost: the credits held while it runs (its real cost is charged after). Defaults to creditCost. */
+  estimate?: (input: TInput) => number;
   /** The media a result produced, in order (the input supplies details such as the prompt, for the artifact panel). */
   assets?: (output: TOutput, input?: TInput) => AssetBlock[];
   /** What is stored and shown of the input. Defaults to a generic clean-up (see sanitizeInput). */
@@ -92,6 +94,11 @@ const MAX_TEXT = 500;
 const MAX_ITEMS = 20;
 
 /** A copy of a tool's input fit for storage and display: secrets dropped, long text and long lists shortened. */
+/** The credits to hold for a call with this (validated) input. */
+export function estimateFor(tool: ToolDefinition, input: unknown): number {
+  return tool.estimate ? tool.estimate(input) : tool.creditCost;
+}
+
 export function sanitizeInput(value: unknown, depth = 0): unknown {
   if (typeof value === "string") return value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}…` : value;
   if (Array.isArray(value)) {

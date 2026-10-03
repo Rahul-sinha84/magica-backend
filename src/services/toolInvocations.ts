@@ -4,6 +4,7 @@ import { AppError } from "#src/lib/errors.js";
 import { toolChargeKey, toolHoldKey, toolReleaseKey } from "#src/lib/idempotency.js";
 import { charge, hold, release } from "#src/services/credits.js";
 import { addGeneratedMedia } from "#src/services/media.js";
+import { PROVIDER_CREDIT_RATE } from "#src/tools/costs.js";
 import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
 import { recordToolEvent } from "#src/webhooks/events.js";
 
@@ -34,7 +35,7 @@ export interface NewInvocation {
   toolName: string;
   /** the validated input (what the tool will run with) */
   input: unknown;
-  /** credits reserved now and charged on success */
+  /** the estimate, reserved now; on success the call is charged what it really cost (see completeInvocation) */
   creditCost: number;
 }
 
@@ -96,40 +97,59 @@ export async function markRunning(invocationId: string, magicaRunId: string, db:
 export interface Completion {
   output: unknown;
   durationMs: number;
+  /** what the provider reported the run used (Magica's `creditUsed`): the call is charged this, at PROVIDER_CREDIT_RATE */
   providerCost?: number | null;
   /** what the call made; added to the user's media library in the same transaction */
   assets?: readonly (ImageBlock | VideoBlock | AudioBlock)[];
 }
 
+/** What a finished call owes: what the provider reported it used, at the rate; the held estimate if it reported nothing. */
+export function costOf(providerCost: number | null | undefined, estimate: number): number {
+  if (providerCost == null || !Number.isFinite(providerCost)) return estimate;
+  return Math.max(0, Math.round(providerCost * PROVIDER_CREDIT_RATE));
+}
+
+/** The user's credits not held by anything, with their row locked until the transaction ends. */
+async function availableCredits(tx: Tx, userId: string): Promise<number> {
+  const rows = await tx.$queryRaw<{ available: number | bigint }[]>`SELECT "balance" - "held" AS available FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+  return Math.max(0, Number(rows[0]?.available ?? 0));
+}
+
 /**
- * Finishes a successful call and charges for it: release the reservation, then charge the same amount, in the same
- * transaction as the status change. False when the call had already ended (cancelled meanwhile): nothing is charged.
+ * Finishes a successful call and charges what it really cost, in the same transaction as the status change: the
+ * reservation (the estimate) is released, then the provider's reported cost is charged (from the released credits, and
+ * beyond them if it cost more, but never more than the user has: a balance can't go below zero). Answers what was
+ * charged, or null when the call had already ended (cancelled meanwhile): nothing is charged then.
  */
-export async function completeInvocation(invocationId: string, done: Completion, db: typeof prisma = prisma): Promise<boolean> {
+export async function completeInvocation(invocationId: string, done: Completion, db: typeof prisma = prisma): Promise<{ creditCost: number } | null> {
   const deliveries: string[] = [];
   const completed = await db.$transaction(async (tx) => {
     const reserved = await heldFor(tx, invocationId);
+    const providerCost = done.providerCost == null ? null : Math.max(0, Math.round(done.providerCost));
     const { count } = await tx.toolInvocation.updateMany({
       where: { id: invocationId, status: { in: ["DISPATCHING", "RUNNING"] } },
       data: {
         status: "COMPLETED",
         output: toJson(done.output),
         durationMs: Math.max(0, Math.round(done.durationMs)),
-        providerCost: done.providerCost == null ? null : Math.max(0, Math.round(done.providerCost)),
-        creditCost: reserved?.amount ?? 0,
+        providerCost,
+        creditCost: 0,
         completedAt: new Date(),
         errorMessage: null,
       },
     });
-    if (count === 0) return false;
+    if (count === 0) return null;
+    let creditCost = 0;
     if (reserved) {
-      const entry = { userId: reserved.userId, amount: reserved.amount, agentRunId: reserved.agentRunId ?? undefined };
-      await release(tx, { ...entry, reason: "tool reservation settled", idempotencyKey: toolReleaseKey(invocationId) });
-      await charge(tx, { ...entry, reason: "tool call", idempotencyKey: toolChargeKey(invocationId) });
+      const entry = { userId: reserved.userId, agentRunId: reserved.agentRunId ?? undefined };
+      await release(tx, { ...entry, amount: reserved.amount, reason: "tool reservation settled", idempotencyKey: toolReleaseKey(invocationId) });
+      creditCost = Math.min(costOf(providerCost, reserved.amount), await availableCredits(tx, reserved.userId));
+      if (creditCost > 0) await charge(tx, { ...entry, amount: creditCost, reason: "tool call", idempotencyKey: toolChargeKey(invocationId) });
+      await tx.toolInvocation.update({ where: { id: invocationId }, data: { creditCost } });
     }
     if (done.assets?.length) await addGeneratedMedia(tx, invocationId, done.assets);
     deliveries.push(...(await recordToolEvent(tx, invocationId, "tool.completed")));
-    return true;
+    return { creditCost };
   });
   if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
   return completed;

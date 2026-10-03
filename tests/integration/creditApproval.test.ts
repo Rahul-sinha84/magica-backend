@@ -6,7 +6,7 @@ import { loadConversation } from "#src/agent/context.js";
 import type { AgentTurnPayload } from "#src/agent/payload.js";
 import { runAgentTurn, type TurnDeps } from "#src/agent/runTurn.js";
 import { SPEND_DECLINED, SPEND_DECLINED_FOR_MODEL } from "#src/agent/toolStep.js";
-import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
+import { gptImage2Estimate } from "#src/tools/costs.js";
 import { agentTools } from "#src/tools/index.js";
 import { runMagicaInvocation } from "#src/tools/magicaInvocation.js";
 import { as } from "../helpers/app.js";
@@ -28,7 +28,9 @@ afterEach(async () => {
 });
 
 const silent = pino({ level: "silent" });
-const IMAGE = TOOL_CREDIT_COSTS.gpt_image_2;
+const IMAGE = gptImage2Estimate({ quality: "low", size: "auto", n: 1 }); // a low-quality image's estimate: what approvals add up
+const IMAGE_COST = 7644; // what the fixture's Magica run reports it used: what each image is charged (the same, as it should be)
+const BETWEEN = IMAGE + 1; // a threshold one image fits under and two don't
 
 async function magica() {
   const server = await startMagicaServer({
@@ -91,10 +93,10 @@ const toolResults = (model: ReturnType<typeof fakeModelSteps>, step: number) =>
 describe("spend approval", () => {
   it("doesn't ask below the threshold: a single image runs at the default", async () => {
     const { payload } = await setup();
-    const { done } = await start(payload, [[image("ImgCall1"), finished()], DONE], 2_000_000);
+    const { done } = await start(payload, [[image("ImgCall1"), finished()], DONE], 600_000); // CREDIT_APPROVAL_THRESHOLD's default
     expect(await done).toBe("completed");
     expect(await prisma.waitpoint.count()).toBe(0);
-    expect(await invocations()).toEqual([{ status: "COMPLETED", creditCost: IMAGE }]);
+    expect(await invocations()).toEqual([{ status: "COMPLETED", creditCost: IMAGE_COST }]);
   });
 
   it("doesn't ask at exactly the threshold (only above it)", async () => {
@@ -106,7 +108,7 @@ describe("spend approval", () => {
 
   it("asks above it, adding up the step's calls, and runs and charges each once when approved", async () => {
     const { turn, payload } = await setup();
-    const { done, server } = await start(payload, [twoImages(), DONE], 1_500_000);
+    const { done, server } = await start(payload, [twoImages(), DONE], BETWEEN);
     const waiting = await pending();
     expect(waiting).toMatchObject({
       type: "CREDIT",
@@ -116,7 +118,7 @@ describe("spend approval", () => {
           { toolCallId: "s1-ImgCallB", toolName: "gpt_image_2", credits: IMAGE },
         ],
         totalCredits: 2 * IMAGE,
-        threshold: 1_500_000,
+        threshold: BETWEEN,
       },
     });
     expect(server.count("POST")).toBe(0); // nothing sent to Magica while it waits
@@ -124,19 +126,20 @@ describe("spend approval", () => {
 
     expect((await answer(waiting.id, "approve")).body).toMatchObject({ waitpoint: { type: "credit", status: "approved" } });
     expect(await done).toBe("completed");
+    // approved on the estimates; charged what each image really cost
     expect(await invocations()).toEqual([
-      { status: "COMPLETED", creditCost: IMAGE },
-      { status: "COMPLETED", creditCost: IMAGE },
+      { status: "COMPLETED", creditCost: IMAGE_COST },
+      { status: "COMPLETED", creditCost: IMAGE_COST },
     ]);
-    expect(await balance()).toEqual({ balance: 10_000_000 - 2 * IMAGE, held: 0 });
-    expect((await prisma.creditLedger.findMany({ where: { type: "CHARGE" } })).map((e) => e.amount)).toEqual([-IMAGE, -IMAGE]);
+    expect(await balance()).toEqual({ balance: 10_000_000 - 2 * IMAGE_COST, held: 0 });
+    expect((await prisma.creditLedger.findMany({ where: { type: "CHARGE" } })).map((e) => e.amount)).toEqual([-IMAGE_COST, -IMAGE_COST]);
     const card = ContentBlocksSchema.parse((await prisma.message.findUniqueOrThrow({ where: { id: turn.assistantMessage.id } })).contentBlocks).find((b) => b.type === "waitpoint");
     expect(card).toMatchObject({ waitpointType: "credit", status: "approved" });
   });
 
   it("fails those calls when declined, charging nothing, and the agent carries on", async () => {
     const { chat, turn, payload } = await setup();
-    const { done, model, emitted, server } = await start(payload, [twoImages(), [text("Okay, I won't make them."), finished()]], 1_500_000);
+    const { done, model, emitted, server } = await start(payload, [twoImages(), [text("Okay, I won't make them."), finished()]], BETWEEN);
     await answer((await pending()).id, "reject");
     expect(await done).toBe("completed");
 
@@ -160,7 +163,7 @@ describe("spend approval", () => {
 
   it("asks again when the agent tries again after a decline in the same turn", async () => {
     const { payload } = await setup();
-    const { done } = await start(payload, [twoImages(), twoImages("ImgCallC", "ImgCallD"), DONE], 1_500_000);
+    const { done } = await start(payload, [twoImages(), twoImages("ImgCallC", "ImgCallD"), DONE], BETWEEN);
     await answer((await pending()).id, "reject");
     const second = await pending();
     expect(second.payload).toMatchObject({ calls: [{ toolCallId: "s2-ImgCallC" }, { toolCallId: "s2-ImgCallD" }] });
@@ -173,7 +176,7 @@ describe("spend approval", () => {
   it("doesn't ask again once a plan is approved: the plan covers the turn's spend", async () => {
     const { payload } = await setup({ mode: "PLAN" });
     const plan = { title: "Two animals", overview: "A fox and a wolf.", steps: [{ title: "Fox", tool: "gpt_image_2" }, { title: "Wolf", tool: "gpt_image_2" }] };
-    const { done } = await start(payload, [[toolCall("propose_plan", plan, "PlanCall1"), finished()], twoImages(), DONE], 1_500_000);
+    const { done } = await start(payload, [[toolCall("propose_plan", plan, "PlanCall1"), finished()], twoImages(), DONE], BETWEEN);
     const waiting = await pending();
     expect(waiting.type).toBe("PLAN");
     await answer(waiting.id, "approve");
@@ -183,18 +186,19 @@ describe("spend approval", () => {
   });
 
   it("stops cleanly if the credits run out after the approval, charging nothing", async () => {
-    const { turn, payload } = await setup({ balance: 1_500_000 });
-    const { done, server } = await start(payload, [twoImages(), DONE], 1_000_000);
+    const enough = IMAGE + IMAGE / 2; // one image's estimate fits, two don't (this turn holds no admission credits)
+    const { turn, payload } = await setup({ balance: enough });
+    const { done, server } = await start(payload, [twoImages(), DONE], BETWEEN);
     await answer((await pending()).id, "approve");
     expect(await done).toBe("failed");
     expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: turn.run.id } })).toMatchObject({ errorCode: "INSUFFICIENT_CREDITS" });
     expect(server.count("POST")).toBe(0);
-    expect(await balance()).toEqual({ balance: 1_500_000, held: 0 });
+    expect(await balance()).toEqual({ balance: enough, held: 0 });
   });
 
   it("fails the turn as expired if nobody answers, closing the waiting tool cards and charging nothing", async () => {
     const { turn, payload } = await setup();
-    const { done } = await start(payload, [twoImages(), DONE], 1_500_000);
+    const { done } = await start(payload, [twoImages(), DONE], BETWEEN);
     fake.timeOut((await pending()).triggerTokenId);
     expect(await done).toBe("failed");
     expect(await prisma.agentRun.findUniqueOrThrow({ where: { id: turn.run.id } })).toMatchObject({ errorCode: "WAITPOINT_EXPIRED" });

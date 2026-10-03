@@ -5,11 +5,11 @@ description: "Generate, crop or merge media with Magica's models, without a chat
 
 The agent picks tools itself in a conversation. When you already know what you want, run a tool directly:
 
-| Endpoint | Tool | Credits |
+| Endpoint | Tool | Price |
 | --- | --- | --- |
-| [`POST /v1/tools/gpt-image-2`](/api-reference/tools/run-gpt-image-2) | Create an image from a prompt, or edit images | 1,000,000 |
-| [`POST /v1/tools/crop-image`](/api-reference/tools/run-crop-image) | Keep a rectangle of an image | 200,000 |
-| [`POST /v1/tools/merge-videos`](/api-reference/tools/run-merge-videos) | Join 2 to 100 videos | 500,000 |
+| [`POST /v1/tools/gpt-image-2`](/api-reference/tools/run-gpt-image-2) | Create an image from a prompt, or edit images | by quality and size, e.g. 68,484 at medium 1024×1024 ([Credits](/concepts/credits)) |
+| [`POST /v1/tools/crop-image`](/api-reference/tools/run-crop-image) | Keep a rectangle of an image | 5,000 |
+| [`POST /v1/tools/merge-videos`](/api-reference/tools/run-merge-videos) | Join 2 to 100 videos | per minute of output, 50,000 for two videos |
 
 The body is the tool's input, checked exactly as the agent's calls are:
 
@@ -32,7 +32,7 @@ Then poll [`GET /v1/tools/runs/{runId}`](/api-reference/tools/get-a-tool-run) (a
     "tool": "gpt_image_2",
     "status": "completed",
     "input": { "n": 1, "mode": "text", "size": "1024x1024", "prompt": "A small red paper boat on a calm blue pond, top-down view", "quality": "low", "background": "auto", "output_format": "png" },
-    "credits": 1000000,
+    "credits": 7644,
     "durationMs": 45592,
     "assets": [{ "type": "image", "url": "https://g.tlcdn.com/gen/11e707c5be4f4a20be703f0b715844bf.png", "mimeType": "image/png", "width": 1024, "height": 1024 }],
     "error": null,
@@ -44,6 +44,6 @@ Then poll [`GET /v1/tools/runs/{runId}`](/api-reference/tools/get-a-tool-run) (a
 
 ## How it's charged
 
-The credits are reserved when the run starts and charged **once** if it completes; if it fails (or can't start), they are given back. The result also lands in your Media Library. A run stuck far past its limit is ended when you read it, and its credits returned.
+The estimate is reserved when the run starts. If it completes, you're charged **once**, exactly what Magica reports it used (`credits` above), and the rest is given back; if it fails (or can't start), all of it is given back. See [Credits](/concepts/credits). The result also lands in your Media Library. A run stuck far past its limit is ended when you read it, and its credits returned.
 
 Add a `webhook` next to the input to get `tool.completed` or `tool.failed`. See [Webhooks](/webhooks).

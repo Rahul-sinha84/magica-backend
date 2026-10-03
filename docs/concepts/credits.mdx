@@ -3,20 +3,21 @@ title: "Credits"
 description: "What costs credits, and how charges are settled."
 ---
 
-The agent's model is free. **Magica's media tools cost credits**:
+The agent's model is free. **Magica's media tools cost credits**: each call is charged exactly what Magica reports it used (one of our credits is one of Magica's). Before a call runs, its estimate is held, worked out from the call's input with Magica's prices:
 
-| Tool | Credits per call |
+| Tool | Price |
 | --- | --- |
-| GPT Image 2 | 1,000,000 |
-| Merge Videos | 500,000 |
-| Crop Image | 200,000 |
+| GPT Image 2 | per image, by quality and size. At 1024×1024: low 7,644, medium 68,484, high 273,936. At 1536×1024: low 6,162, medium 53,508, high 214,032. The largest, high at 2048×2048, is 556,608. |
+| Merge Videos | per minute of output, prorated: 50,000 for two videos, plus 10,000 for each video after that. Two 10-second clips cost about 16,700. The estimate assumes one minute; a longer merge is charged its real cost. |
+| Crop Image | 5,000 |
 
 [`GET /v1/credits`](/api-reference/account/get-credits) shows your `balance` and how much of it is `held`.
 
 ## Holds and settlement
 
 - When a run starts, a small amount is **held** so a run can't start without credits. It's released when the run ends.
-- Before a tool runs, its price is **reserved**. If the tool completes, the reservation becomes a **charge**, exactly once, even if parts of the system retry. If the tool fails, is stopped, or the run ends first, the reservation is given back.
+- Before a tool runs, its estimate is **reserved**. When the tool completes, you're **charged what it really cost** (Magica's reported cost), exactly once, even if parts of the system retry, and the rest of the reservation is given back. A call that costs more than its estimate is charged in full from your available credits, but never more than you have. If the tool fails, is stopped, or the run ends first, the whole reservation is given back.
+- Spend approvals show each call's estimate. A plan, made before the calls exist, prices each step at the tool's typical cost (GPT Image 2 at medium, 1024×1024).
 - A run reports what its tools cost in `usage.credits`; each tool call has its own `credits`.
 
 ## Running out

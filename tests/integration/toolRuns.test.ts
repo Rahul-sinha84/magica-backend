@@ -5,7 +5,7 @@ import { prisma } from "#src/db/client.js";
 import { createApiKey } from "#src/services/apiKeys.js";
 import { QUEUE_LIMIT_MS, TOOL_CALL_LIMIT_MS } from "#src/services/reconcile.js";
 import { endInvocation } from "#src/services/toolInvocations.js";
-import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
+import { gptImage2Estimate } from "#src/tools/costs.js";
 import { agentTools } from "#src/tools/index.js";
 import { runMagicaInvocation } from "#src/tools/magicaInvocation.js";
 import { app } from "../helpers/app.js";
@@ -21,7 +21,8 @@ afterEach(async () => {
 });
 
 const silent = pino({ level: "silent" });
-const IMAGE = TOOL_CREDIT_COSTS.gpt_image_2;
+const IMAGE = gptImage2Estimate({ quality: "low", size: "auto", n: 1 }); // held while it runs: Magica's price for a low-quality image
+const IMAGE_COST = 7644; // what the fixture's Magica run reports it used: what the run is charged
 const GENERATED = "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png"; // what the gpt_text fixture returns
 
 async function keyFor(userId: string, balance = 10_000_000) {
@@ -71,12 +72,12 @@ describe("POST /v1/tools/{tool}", () => {
     const outcomes = await Promise.all([work(runId), work(runId)]);
     expect(outcomes.map((o) => (o.status === "COMPLETED" ? "COMPLETED" : o.message)).sort()).toEqual(["COMPLETED", "This tool call is already running."]);
     expect((await work(runId)).status).toBe("COMPLETED"); // a later repeat answers from the database
-    expect(await credits("u1")).toEqual({ balance: 10_000_000 - IMAGE, held: 0 });
+    expect(await credits("u1")).toEqual({ balance: 10_000_000 - IMAGE_COST, held: 0 });
     expect(await prisma.creditLedger.count({ where: { type: "CHARGE" } })).toBe(1);
     expect(await prisma.mediaAsset.findMany({ select: { userId: true, url: true, source: true } })).toEqual([{ userId: "u1", url: GENERATED, source: "GENERATED" }]);
 
     const run = await getRun(secret, runId);
-    expect(run).toMatchObject({ id: runId, tool: "gpt_image_2", status: "completed", credits: IMAGE, error: null, assets: [{ type: "image", url: GENERATED }] });
+    expect(run).toMatchObject({ id: runId, tool: "gpt_image_2", status: "completed", credits: IMAGE_COST, error: null, assets: [{ type: "image", url: GENERATED }] });
     expect(JSON.stringify(run)).not.toContain("mg_standalone");
   });
 
@@ -104,7 +105,7 @@ describe("POST /v1/tools/{tool}", () => {
     expect(again.body).toEqual(first.body);
     expect(again.headers["idempotent-replayed"]).toBe("true");
     expect(await prisma.toolInvocation.count()).toBe(1);
-    expect(await credits("u1")).toEqual({ balance: 10_000_000, held: IMAGE });
+    expect(await credits("u1")).toEqual({ balance: 10_000_000, held: 68_484 }); // once, at the default quality's price (medium)
     // the same key on another tool is a different request
     expect((await start(secret, "crop-image", { image_url: GENERATED, crop: { x: 0, y: 0, width: 50, height: 50 } }, { "Idempotency-Key": "fox-1" })).status).toBe(202);
   });
@@ -134,7 +135,7 @@ describe("POST /v1/tools/{tool}", () => {
   });
 
   it("refuses a run the user can't pay for (402), recording nothing", async () => {
-    const secret = await keyFor("u1", 500_000);
+    const secret = await keyFor("u1", IMAGE - 1); // just short of the image's estimate
     const res = await start(secret, "gpt-image-2", { mode: "text", prompt: "A fox" });
     expect(res.status).toBe(402);
     expect(await prisma.toolInvocation.count()).toBe(0);

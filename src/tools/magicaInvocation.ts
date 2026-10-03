@@ -12,7 +12,8 @@ import type { ToolRegistry } from "#src/tools/registry.js";
 // run). Every ending goes through the invocation service, which charges or releases credits exactly once.
 
 export type InvocationOutcome =
-  | { status: "COMPLETED"; output: unknown; assets: AssetBlock[]; durationMs: number }
+  // creditCost: what the call was charged (its real cost, not the estimate held while it ran)
+  | { status: "COMPLETED"; output: unknown; assets: AssetBlock[]; durationMs: number; creditCost: number }
   | { status: "FAILED" | "CANCELLED"; message: string };
 
 export interface InvocationDeps {
@@ -59,7 +60,10 @@ export async function runMagicaInvocation(invocationId: string, deps: Invocation
   if (invocation.status === "COMPLETED") {
     const output = tool.output.safeParse(invocation.output);
     const savedInput = tool.input.safeParse(invocation.input);
-    if (output.success) return { status: "COMPLETED", output: output.data, assets: tool.assets?.(output.data, savedInput.success ? savedInput.data : undefined) ?? [], durationMs: invocation.durationMs ?? 0 };
+    if (output.success) {
+      const assets = tool.assets?.(output.data, savedInput.success ? savedInput.data : undefined) ?? [];
+      return { status: "COMPLETED", output: output.data, assets, durationMs: invocation.durationMs ?? 0, creditCost: invocation.creditCost ?? 0 };
+    }
     return { status: "FAILED", message: `${tool.magica.label} returned an unexpected result.` };
   }
   if (invocation.status === "FAILED" || invocation.status === "CANCELLED") return { status: invocation.status, message: invocation.errorMessage ?? STOPPED };
@@ -125,16 +129,19 @@ export async function runMagicaInvocation(invocationId: string, deps: Invocation
   }
   const durationMs = dispatchedAt === null ? 0 : now() - dispatchedAt;
   const assets = tool.assets?.(output.data, input.data) ?? [];
-  const settled = await withRetries(() => completeInvocation(invocationId, { output: output.data, durationMs, providerCost: result.run.creditUsed ?? null, assets }, db), log, "save the finished tool call");
+  const providerCost = result.run.creditUsed ?? null;
+  // without a reported cost the call is charged its estimate; worth knowing, since the charge is meant to be exact
+  if (providerCost === null) log.warn({ invocationId, tool: tool.name }, "Magica reported no cost for this run; charging the estimate");
+  const settled = await withRetries(() => completeInvocation(invocationId, { output: output.data, durationMs, providerCost, assets }, db), log, "save the finished tool call");
   if (!settled) {
     // Nothing changed: either the call was ended meanwhile (stopped: not charged, result not used), or an earlier save
     // attempt did commit and only its reply was lost (completed and charged). Report what the database says.
-    const current = await db.toolInvocation.findUnique({ where: { id: invocationId }, select: { status: true, errorMessage: true, durationMs: true } });
-    if (current?.status === "COMPLETED") return { status: "COMPLETED", output: output.data, assets, durationMs: current.durationMs ?? durationMs };
+    const current = await db.toolInvocation.findUnique({ where: { id: invocationId }, select: { status: true, errorMessage: true, durationMs: true, creditCost: true } });
+    if (current?.status === "COMPLETED") return { status: "COMPLETED", output: output.data, assets, durationMs: current.durationMs ?? durationMs, creditCost: current.creditCost ?? 0 };
     return { status: current?.status === "FAILED" ? "FAILED" : "CANCELLED", message: current?.errorMessage ?? STOPPED };
   }
-  log.info({ invocationId, tool: tool.name, durationMs, providerCost: result.run.creditUsed }, "tool call completed");
-  return { status: "COMPLETED", output: output.data, assets, durationMs };
+  log.info({ invocationId, tool: tool.name, durationMs, providerCost, creditCost: settled.creditCost }, "tool call completed");
+  return { status: "COMPLETED", output: output.data, assets, durationMs, creditCost: settled.creditCost };
 }
 
 class AlreadyTaken extends Error {}

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { CropImageInputSchema, GptImage2InputSchema, LoadSkillInputSchema, MergeVideosInputSchema, ReadSkillAssetInputSchema } from "#src/contracts/index.js";
 import { TurnError } from "#src/agent/turnError.js";
 import { agentTools } from "#src/tools/index.js";
-import { createToolRegistry, defineTool, describeIssues, displayInput, sanitizeInput, ToolError, type ToolContext } from "#src/tools/registry.js";
+import { createToolRegistry, defineTool, describeIssues, displayInput, estimateFor, sanitizeInput, ToolError, type ToolContext } from "#src/tools/registry.js";
 import { TOOL_CREDIT_COSTS } from "#src/tools/costs.js";
 
 function context() {
@@ -142,14 +142,48 @@ describe("the agent's tools today", () => {
   it("are the two skill tools and the plan tool (inline, free) and the three Magica tools (durable, priced)", () => {
     expect(agentTools.names()).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos", "propose_plan"]);
     for (const name of ["load_skill", "read_skill_asset", "propose_plan"]) expect(agentTools.get(name)).toMatchObject({ kind: "inline", creditCost: 0 });
-    expect(agentTools.get("gpt_image_2")).toMatchObject({ kind: "magica", creditCost: 1_000_000 });
-    expect(agentTools.get("crop_image")).toMatchObject({ kind: "magica", creditCost: 200_000 });
-    expect(agentTools.get("merge_videos")).toMatchObject({ kind: "magica", creditCost: 500_000 });
-    expect(TOOL_CREDIT_COSTS).toEqual({ load_skill: 0, read_skill_asset: 0, gpt_image_2: 1_000_000, crop_image: 200_000, merge_videos: 500_000, propose_plan: 0 });
+    expect(agentTools.get("gpt_image_2")).toMatchObject({ kind: "magica", creditCost: 68_484 });
+    expect(agentTools.get("crop_image")).toMatchObject({ kind: "magica", creditCost: 5_000 });
+    expect(agentTools.get("merge_videos")).toMatchObject({ kind: "magica", creditCost: 50_000 });
+    expect(TOOL_CREDIT_COSTS).toEqual({ load_skill: 0, read_skill_asset: 0, gpt_image_2: 68_484, crop_image: 5_000, merge_videos: 50_000, propose_plan: 0 });
   });
 
   it("each have a description the model can act on", () => {
     for (const fn of agentTools.functions()) expect(fn.function.description.length).toBeGreaterThan(30);
+  });
+});
+
+describe("what a call is estimated to cost (Magica's own prices; the real cost is charged after)", () => {
+  const priced = (name: string, input: unknown) => {
+    const tool = agentTools.get(name)!;
+    return estimateFor(tool, tool.input.parse(input));
+  };
+  const image = (extra: object) => priced("gpt_image_2", { mode: "text", prompt: "A fox", ...extra });
+
+  it("prices GPT Image 2 by quality and size, exactly as Magica charged these real runs", () => {
+    expect(image({ quality: "low", size: "1024x1024" })).toBe(7644);
+    expect(image({})).toBe(68_484); // medium, auto (priced as 1024x1024): the defaults
+    expect(image({ size: "1536x1024" })).toBe(53_508);
+    expect(image({ quality: "high", size: "1536x1024" })).toBe(214_032);
+    expect(image({ quality: "high", size: "2048x2048" })).toBe(556_608);
+    expect(priced("gpt_image_2", { mode: "edit", prompt: "Darker", image_urls: ["https://a.test/1.png"] })).toBe(68_484); // edits cost the same
+  });
+
+  it("multiplies by the number of images, and prices every size the input allows", () => {
+    expect(image({ n: 3 })).toBe(3 * 68_484);
+    for (const quality of ["low", "medium", "high"]) {
+      for (const size of GptImage2InputSchema.shape.size.unwrap().options) expect(image({ quality, size })).toBeGreaterThan(0);
+    }
+  });
+
+  it("prices a crop at 5,000 and a merge per assumed minute: 50,000 for two videos, 10,000 more for each after", () => {
+    expect(priced("crop_image", { image_url: "https://a.test/1.png", crop: { x: 0, y: 0, width: 50, height: 50 } })).toBe(5000);
+    const merge = (count: number) => priced("merge_videos", { video_urls: Array.from({ length: count }, (_, i) => `https://a.test/${i}.mp4`) });
+    expect([merge(2), merge(3), merge(10)]).toEqual([50_000, 60_000, 130_000]);
+  });
+
+  it("costs nothing for the free tools", () => {
+    expect(priced("load_skill", { name: "image-generation" })).toBe(0);
   });
 });
 

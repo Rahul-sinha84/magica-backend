@@ -70,9 +70,10 @@ describe("each tool, end to end against Magica", () => {
       output: { images: [{ url: "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png", width: 1024, height: 1024, mimeType: "image/png" }] },
       assets: [{ type: "image", url: "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png", model: "GPT Image 2", prompt: "A red fox in snow", mimeType: "image/png", width: 1024, height: 1024 }],
       durationMs: 9_000,
+      creditCost: 7644, // what Magica reported, not the 60,000 estimate held while it ran
     });
-    expect(await row(invocation.id)).toMatchObject({ status: "COMPLETED", magicaRunId: "mg_run_1", creditCost: 1_000_000, providerCost: 7644, durationMs: 9_000 });
-    expect(await credits(user.id)).toEqual({ balance: 9_000_000, held: 0 });
+    expect(await row(invocation.id)).toMatchObject({ status: "COMPLETED", magicaRunId: "mg_run_1", creditCost: 7644, providerCost: 7644, durationMs: 9_000 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 7644, held: 0 });
     // and the image is in the user's media library, with what it was made from
     expect(await prisma.mediaAsset.findMany({ select: { userId: true, source: true, type: true, url: true, prompt: true, model: true, width: true, height: true, mimeType: true, expiresAt: true, toolInvocationId: true } })).toEqual([
       { userId: user.id, source: "GENERATED", type: "IMAGE", url: "https://g.tlcdn.com/gen/851fbf5cbc7546dcb9d22966b915153c.png", prompt: "A red fox in snow", model: "GPT Image 2", width: 1024, height: 1024, mimeType: "image/png", expiresAt: null, toolInvocationId: invocation.id },
@@ -92,14 +93,14 @@ describe("each tool, end to end against Magica", () => {
     const { user, invocation } = await setup("crop_image", { image_url: IMG, crop: { x: 0, y: 0, width: 100, height: 50 } });
     expect(await invoke(invocation.id, server.url)).toMatchObject({ status: "COMPLETED", output: { image: { url: expect.stringContaining("7a3cc3bb") as unknown, width: 1024, height: 512 } }, assets: [{ type: "image", model: "Crop Image", width: 1024, height: 512 }] });
     expect(server.requests.find((r) => r.method === "POST")?.body).toEqual({ input: { image_url: IMG, x_percent: 0, y_percent: 0, width_percent: 100, height_percent: 50 } });
-    expect(await credits(user.id)).toEqual({ balance: 9_800_000, held: 0 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 5000, held: 0 });
   });
 
   it("merge_videos: keeps the order, sends the transition and saves the video with its duration", async () => {
     const server = await magicaFor([completed("merge")]);
     const urls = ["https://a.test/2.mp4", "https://a.test/1.mp4", "https://a.test/3.mp4"];
     const { invocation } = await setup("merge_videos", { video_urls: urls, transition: "fade" });
-    expect(await invoke(invocation.id, server.url)).toMatchObject({ status: "COMPLETED", output: { video: { mimeType: "video/mp4", durationMs: 20_022, width: 640, height: 360 } }, assets: [{ type: "video", model: "Merge Videos", mimeType: "video/mp4" }] });
+    expect(await invoke(invocation.id, server.url)).toMatchObject({ status: "COMPLETED", output: { video: { mimeType: "video/mp4", durationMs: 20_022, width: 640, height: 360 } }, assets: [{ type: "video", model: "Merge Videos", mimeType: "video/mp4" }], creditCost: 16_685 });
     expect(server.requests.find((r) => r.method === "POST")?.body).toEqual({ input: { video_urls: urls, transition: "fade" } });
     expect(await prisma.mediaAsset.findMany({ select: { source: true, type: true, model: true, mimeType: true, toolInvocationId: true } })).toEqual([
       { source: "GENERATED", type: "VIDEO", model: "Merge Videos", mimeType: "video/mp4", toolInvocationId: invocation.id },
@@ -200,17 +201,18 @@ describe("never paying twice", () => {
     expect(await invoke(invocation.id, server.url)).toMatchObject({ status: "COMPLETED" });
     expect(server.count("POST")).toBe(0);
     expect(server.requests.filter((r) => r.method === "GET" && r.path.startsWith("/v1/nodes/runs/")).every((r) => r.path === "/v1/nodes/runs/mg_existing")).toBe(true);
-    expect(await credits(user.id)).toEqual({ balance: 9_000_000, held: 0 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 7644, held: 0 });
   });
 
   it("a call that already finished answers from what was saved, without calling Magica", async () => {
     const server = await magicaFor([completed("crop")]);
     const { user, invocation } = await setup("crop_image", { image_url: IMG, crop: { x: 0, y: 0, width: 100, height: 50 } });
     const first = await invoke(invocation.id, server.url);
+    expect(first).toMatchObject({ status: "COMPLETED", creditCost: 5000 });
     const requests = server.requests.length;
-    expect(await invoke(invocation.id, server.url)).toEqual(first);
+    expect(await invoke(invocation.id, server.url)).toEqual(first); // the same charge, read back from the database
     expect(server.requests.length).toBe(requests);
-    expect(await credits(user.id)).toEqual({ balance: 9_800_000, held: 0 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 5000, held: 0 });
   });
 
   it("two attempts running the same call at once: one sends it, one charge", async () => {
@@ -219,7 +221,7 @@ describe("never paying twice", () => {
     const outcomes = await Promise.all([invoke(invocation.id, server.url), invoke(invocation.id, server.url)]);
     expect(server.count("POST")).toBe(1);
     expect(outcomes.filter((o) => o.status === "COMPLETED")).toHaveLength(1);
-    expect(await credits(user.id)).toEqual({ balance: 9_800_000, held: 0 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 5000, held: 0 });
   });
 
   it("keeps the run id safe when saving it fails at first, and still finishes", async () => {
@@ -305,8 +307,8 @@ describe("the registry", () => {
       return result;
     }));
     const outcome = await invoke(invocation.id, server.url);
-    expect(outcome).toMatchObject({ status: "COMPLETED", assets: [{ type: "image", model: "Crop Image" }] });
-    expect(await credits(user.id)).toEqual({ balance: 9_800_000, held: 0 }); // charged exactly once
+    expect(outcome).toMatchObject({ status: "COMPLETED", assets: [{ type: "image", model: "Crop Image" }], creditCost: 5000 }); // read back from the database
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 5000, held: 0 }); // charged exactly once
   });
 
   it("answers a finished call from the database with the same assets, prompt included", async () => {
@@ -325,6 +327,6 @@ describe("the registry", () => {
     let calls = 0;
     vi.spyOn(prisma, "$transaction").mockImplementation(((fn: unknown) => (calls++ === 0 ? Promise.reject(new Error("blip")) : real(fn))));
     expect(await invoke(invocation.id, server.url)).toMatchObject({ status: "COMPLETED" });
-    expect(await credits(user.id)).toEqual({ balance: 9_800_000, held: 0 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 5000, held: 0 });
   });
 });

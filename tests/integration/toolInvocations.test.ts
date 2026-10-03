@@ -99,19 +99,52 @@ describe("settling", () => {
     return { user, run, invocation };
   }
 
-  it("charges a completed call exactly once: the reservation becomes a charge", async () => {
+  it("charges exactly what Magica reported (one credit each), once, and gives back the rest of the estimate", async () => {
     const { user, invocation } = await running();
-    expect(await completeInvocation(invocation.id, { output: { images: [{ url: "https://a.test/1.png" }] }, durationMs: 31_500.4, providerCost: 7644 })).toBe(true);
-    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - COST, held: 0 });
+    expect(await completeInvocation(invocation.id, { output: { images: [{ url: "https://a.test/1.png" }] }, durationMs: 31_500.4, providerCost: 7644 })).toEqual({ creditCost: 7644 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 7644, held: 0 });
     expect(await ledger(user.id)).toEqual([
       { type: "HOLD", amount: COST, idempotencyKey: `tool-hold:${invocation.id}` },
       { type: "RELEASE", amount: -COST, idempotencyKey: `tool-release:${invocation.id}` },
-      { type: "CHARGE", amount: -COST, idempotencyKey: `tool-charge:${invocation.id}` },
+      { type: "CHARGE", amount: -7644, idempotencyKey: `tool-charge:${invocation.id}` },
     ]);
-    expect(await prisma.toolInvocation.findUniqueOrThrow({ where: { id: invocation.id } })).toMatchObject({ status: "COMPLETED", creditCost: COST, providerCost: 7644, durationMs: 31_500, output: { images: [{ url: "https://a.test/1.png" }] } });
+    expect(await prisma.toolInvocation.findUniqueOrThrow({ where: { id: invocation.id } })).toMatchObject({ status: "COMPLETED", creditCost: 7644, providerCost: 7644, durationMs: 31_500, output: { images: [{ url: "https://a.test/1.png" }] } });
 
-    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1 })).toBe(false); // again: nothing changes
-    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - COST, held: 0 });
+    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1, providerCost: 1 })).toBeNull(); // again: nothing changes
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 7644, held: 0 });
+  });
+
+  it("charges the estimate when Magica reports no cost, and nothing when it reports zero", async () => {
+    const unreported = await running();
+    expect(await completeInvocation(unreported.invocation.id, { output: {}, durationMs: 1 })).toEqual({ creditCost: COST });
+    expect(await credits(unreported.user.id)).toEqual({ balance: 10_000_000 - COST, held: 0 });
+
+    await resetDb();
+    const free = await running();
+    expect(await completeInvocation(free.invocation.id, { output: {}, durationMs: 1, providerCost: 0 })).toEqual({ creditCost: 0 });
+    expect(await credits(free.user.id)).toEqual({ balance: 10_000_000, held: 0 });
+    expect((await ledger(free.user.id)).map((e) => e.type)).toEqual(["HOLD", "RELEASE"]); // no zero charge row
+    expect(await prisma.toolInvocation.findUniqueOrThrow({ where: { id: free.invocation.id } })).toMatchObject({ creditCost: 0, providerCost: 0 });
+  });
+
+  it("charges a cost above the estimate in full, from the credits the user has", async () => {
+    const { user, invocation } = await running();
+    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1, providerCost: 2_500_000 })).toEqual({ creditCost: 2_500_000 });
+    expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 2_500_000, held: 0 });
+  });
+
+  it("never charges more than the user has: the balance can reach zero, never below, and other holds stay covered", async () => {
+    const { user, run } = await aRun(1_500_000);
+    const other = await createInvocation(call(run.id, user.id, "other", 500_000)); // still running: its 500,000 stay held
+    const invocation = await createInvocation(call(run.id, user.id)); // holds COST (1,000,000)
+    await markDispatching(invocation.id);
+    await markRunning(invocation.id, "mg_1");
+    // owes 9,000,000; after giving back its own hold, 1,000,000 is free (1,500,000 minus the other call's 500,000)
+    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1, providerCost: 9_000_000 })).toEqual({ creditCost: 1_000_000 });
+    expect(await credits(user.id)).toEqual({ balance: 500_000, held: 500_000 });
+    expect(await prisma.toolInvocation.findUniqueOrThrow({ where: { id: invocation.id } })).toMatchObject({ creditCost: 1_000_000, providerCost: 9_000_000 });
+    await endInvocation(other.id, "FAILED", "No.");
+    expect(await credits(user.id)).toEqual({ balance: 500_000, held: 0 });
   });
 
   it("adds what the call made to the user's library, exactly once, in the same transaction", async () => {
@@ -146,7 +179,7 @@ describe("settling", () => {
   it("adds nothing for a call that was stopped before it completed", async () => {
     const { invocation } = await running();
     await endInvocation(invocation.id, "CANCELLED", "Stopped.");
-    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1, assets: [{ type: "image", url: "https://a.test/late.png" }] })).toBe(false);
+    expect(await completeInvocation(invocation.id, { output: {}, durationMs: 1, assets: [{ type: "image", url: "https://a.test/late.png" }] })).toBeNull();
     expect(await prisma.mediaAsset.count()).toBe(0);
   });
 
@@ -170,7 +203,7 @@ describe("settling", () => {
   it("never charges a call that was stopped first, and never refunds one that completed first", async () => {
     const stopped = await running();
     await endInvocation(stopped.invocation.id, "CANCELLED", "Stopped.");
-    expect(await completeInvocation(stopped.invocation.id, { output: {}, durationMs: 1 })).toBe(false);
+    expect(await completeInvocation(stopped.invocation.id, { output: {}, durationMs: 1 })).toBeNull();
     expect(await credits(stopped.user.id)).toEqual({ balance: 10_000_000, held: 0 });
 
     const done = await running();
@@ -236,7 +269,7 @@ describe("a run ending while its tool calls are still in progress", () => {
     expect(await statusOf(pending.id)).toBe("CANCELLED");
     expect(await statusOf(done.id)).toBe("COMPLETED");
     expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 500_000, held: 0 }); // only the completed call is paid for
-    expect(await completeInvocation(running.id, { output: {}, durationMs: 1 })).toBe(false); // a late finish charges nothing
+    expect(await completeInvocation(running.id, { output: {}, durationMs: 1 })).toBeNull(); // a late finish charges nothing
     expect(await credits(user.id)).toEqual({ balance: 10_000_000 - 500_000, held: 0 });
   });
 
