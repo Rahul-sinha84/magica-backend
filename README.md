@@ -5,7 +5,7 @@ The API and agent worker behind the Magica clone (work trial). An Express + Type
 - **Frontend:** [`magica-frontend`](https://github.com/Rahul-sinha84/magica-frontend) (Next.js), expected next to this repo as `../magica-frontend`.
 - **Build plan and every decision:** [Day 1](https://github.com/Rahul-sinha84/magica-backend/issues/1), [Day 2](https://github.com/Rahul-sinha84/magica-backend/issues/2), [Day 3](https://github.com/Rahul-sinha84/magica-backend/issues/3).
 - **Deployed app:** `https://magica-frontend-eight.vercel.app`; API: `https://magica-backend-production.up.railway.app`.
-- **Public API docs:** Mintlify, from [`docs/`](docs). Run them locally with `pnpm docs:dev`.
+- **Public API docs:** https://personal-f2ba2da4.mintlify.site (Mintlify, built from [`docs/`](docs) on `development`; run them locally with `pnpm docs:dev`).
 
 **Stack:** Node 22.12+ (developed on 26), pnpm 11, TypeScript (strict, ESM), Express 5, PostgreSQL 16 + Prisma 7 (driver adapter), Clerk, Trigger.dev v4, OpenRouter (`openrouter/free` only), the Magica model API, Transloadit, Zod 4, pino, Vitest, Mintlify.
 
@@ -403,7 +403,7 @@ Railway sets `PORT`. Generate a public domain for the service, then check `https
 Deploy `magica-frontend` with `NEXT_PUBLIC_BACKEND_URL` set to the API's URL, plus its Clerk keys (see its README). Then set the API's `FRONTEND_ORIGIN` to the frontend's production URL, exactly as the browser shows it (no trailing slash), and redeploy the API. CORS and Clerk's `authorizedParties` allow only that one origin, so Vercel preview deployments are refused by design.
 
 ### 5. Docs (Mintlify)
-Connect Mintlify's GitHub app to this repo, with the docs folder set to `docs` and the branch you deploy from. `docs/openapi.json` lists the production API first and `http://localhost:3000` second, so the hosted playground calls production. Point it elsewhere with `OPENAPI_SERVER_URL=<url> pnpm docs:generate`.
+Connect Mintlify's GitHub app to this repo (only this repo), set the docs source to the branch you deploy from, and turn on "docs.json is in a subdirectory" with the path `/docs`. Every push that changes `docs/` redeploys the site. `docs/openapi.json` lists the production API first and `http://localhost:3000` second, so the hosted playground calls production. Point it elsewhere with `OPENAPI_SERVER_URL=<url> pnpm docs:generate`.
 
 ### 6. Check it
 - `TEST_TOKEN=<token from the deployed frontend> BASE_URL=https://<api domain> pnpm smoke`.
