@@ -39,7 +39,7 @@
     "magica:try": "tsx --conditions=magica-source --env-file-if-exists=.env.local scripts/magica-try.ts",
     "media:backfill": "tsx --conditions=magica-source --env-file-if-exists=.env.local scripts/media-backfill.ts",
     "docs:generate": "tsx --conditions=magica-source scripts/docs.ts",
-    "docs:dev": "cd docs && npx -y mint@latest dev",
+    "docs:dev": "cd docs && npx -y mint@latest dev --port 3333",
     "docs:check": "cd docs && npx -y mint@latest validate && npx -y mint@latest broken-links"
   },
   "dependencies": {
