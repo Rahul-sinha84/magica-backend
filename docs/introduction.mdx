@@ -1,0 +1,40 @@
+---
+title: "Introduction"
+description: "Talk to the agent, follow its runs, and run Magica's media tools from your own code."
+---
+
+The Magica Clone API is the same agent you use in the app, from your own code. Everything it does through the API shows up in the app too: chats you start appear in the sidebar, images land in the Media Library, and credits come off the same balance.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create a key, send a message, and read the answer in a few minutes.
+  </Card>
+  <Card title="Authentication" icon="key" href="/authentication">
+    API keys, session tokens and per-key limits.
+  </Card>
+  <Card title="Runs" icon="person-running" href="/concepts/runs">
+    Work starts at once and returns a run you poll (or hear about by webhook).
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/webhooks">
+    Signed events as runs start, finish and use tools.
+  </Card>
+</CardGroup>
+
+## What you can do
+
+| You want to | Use |
+| --- | --- |
+| Ask the agent something, in a new or existing chat | [`POST /v1/messages`](/api-reference/messages/send-a-message), then [`GET /v1/runs/{runId}`](/api-reference/runs/get-a-run) |
+| Use an existing chat-completions client | [`POST /v1/chat/completions`](/api-reference/messages/create-a-chat-completion) |
+| Approve a plan or a spend the agent is waiting on | [`POST /v1/waitpoints/{id}/respond`](/api-reference/runs/answer-a-waitpoint) |
+| Generate, crop or merge media without a chat | [`POST /v1/tools/gpt-image-2`](/api-reference/tools/run-gpt-image-2), `crop-image`, `merge-videos` |
+| Read chats, messages, credits and media | [`GET /v1/chats`](/api-reference/messages/list-chats), [`/v1/credits`](/api-reference/account/get-credits), [`/v1/media`](/api-reference/account/list-media) |
+
+## The basics
+
+- **Base URL:** `https://magica-backend-production.up.railway.app` (or `http://localhost:3000` when running it yourself), with paths under `/v1`. Every response carries `x-api-version: 1` and `x-trace-id`.
+- **Auth:** an API key (`mgc_…`) in `x-api-key`, or `Authorization: Bearer mgc_…`. See [Authentication](/authentication).
+- **Long work returns at once.** Starting work answers `202` with a run id; poll the run or pass a [webhook](/webhooks).
+- **Safe retries.** Send an `Idempotency-Key` with anything that starts work. See [Idempotency](/concepts/idempotency).
+- **One error shape:** `{ error, code, details?, traceId }`. See [Errors](/errors).
+- **The model is free.** The agent runs on OpenRouter's free model router (`openrouter/free`); only Magica's media tools cost credits.

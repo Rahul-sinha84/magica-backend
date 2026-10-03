@@ -1,0 +1,53 @@
+---
+title: "Authentication"
+description: "API keys, session tokens, and the limits on each key."
+---
+
+## API keys
+
+Create keys in the app under **API / MCP**. A key looks like `mgc_` followed by 43 characters and is shown **once**, when you create it; afterwards the app shows only its start (`mgc_Hnz3gjhh••••`). Only a hash of each key is stored.
+
+Send the key in either header:
+
+```bash
+curl "$MAGICA_API/v1/credits" -H "x-api-key: mgc_..."
+curl "$MAGICA_API/v1/credits" -H "Authorization: Bearer mgc_..."
+```
+
+- You can have up to **10 active keys**. Expired and revoked keys don't count.
+- A key can be renamed, given new limits, or **revoked**. Revoking is immediate and final.
+- A key can have an expiry, after which it stops working.
+- An unknown, revoked, expired or malformed key is refused the same way: `401 UNAUTHORIZED`.
+
+<Warning>
+  Keep keys on your server. Anyone with a key can use your credits.
+</Warning>
+
+## Session tokens
+
+A signed-in session token from the app (`Authorization: Bearer <token>`) works too, with the same access as the user it belongs to. Prefer API keys for anything that runs unattended.
+
+## Limits
+
+| Limit | Default | Range |
+| --- | --- | --- |
+| Requests per minute, per key | 60 | 1 – 10,000 |
+| Requests per day (UTC), per key | 1,000 | 1 – 100,000 |
+| Starting work (messages, completions, tool runs), per user | 10 a minute | shared with the app |
+| Session tokens | 300 a minute | |
+| Failed sign-ins from one address | 30 a minute | |
+
+A key's limits count every request it makes, whichever header carries it. Over a limit you get `429 RATE_LIMITED` with a `Retry-After` header and `details` naming the limit:
+
+```json Error
+{
+  "error": "This API key's per-minute limit of 60 requests is used up.",
+  "code": "RATE_LIMITED",
+  "details": { "window": "minute", "limit": 60, "retryAfterSeconds": 34 },
+  "traceId": "697f83d6-a2ab-49dd-bbc4-0421d053c3a5"
+}
+```
+
+<Note>
+  Counters are kept in memory by each API instance, so with several instances each enforces the limits on the requests it serves.
+</Note>

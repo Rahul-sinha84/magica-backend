@@ -35,11 +35,17 @@ export const createApiRateLimit = ({ windowMs = WINDOW_MS, authenticated = 300, 
     },
   });
 
-/** Sending a message starts an LLM run, the expensive operation, so it gets its own small per-user allowance. */
+/**
+ * Sending a message starts an LLM run, the expensive operation, so it gets its own small per-user allowance. The user is
+ * whoever the request was authenticated as (a session or an API key), so the app and the public API share one count.
+ */
 export const createMessageSendRateLimit = ({ windowMs = WINDOW_MS, limit = 10 } = {}) =>
   rateLimit({
     ...common,
     windowMs,
     limit,
-    keyGenerator: (req) => `user:${clerkUserId(req) ?? ipKeyGenerator(req.ip ?? "")}`,
+    keyGenerator: (req, res) => {
+      const userId: unknown = res.locals.userId;
+      return `user:${typeof userId === "string" ? userId : (clerkUserId(req) ?? ipKeyGenerator(req.ip ?? ""))}`;
+    },
   });

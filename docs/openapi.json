@@ -1,0 +1,3772 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Magica Clone API",
+    "version": "1",
+    "description": "Send messages to the agent, read conversations, follow runs, answer approvals, and run Magica tools directly. Every response carries `x-api-version: 1` and `x-trace-id`; every error is `{ error, code, details?, traceId }`. Work that takes time starts at once and returns a run to poll."
+  },
+  "servers": [
+    {
+      "url": "https://magica-backend-production.up.railway.app"
+    },
+    {
+      "url": "http://localhost:3000",
+      "description": "Running locally (pnpm dev)"
+    }
+  ],
+  "security": [
+    {
+      "ApiKey": []
+    },
+    {
+      "Bearer": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Messages",
+      "description": "Talk to the agent."
+    },
+    {
+      "name": "Runs",
+      "description": "Follow, stop and answer runs."
+    },
+    {
+      "name": "Tools",
+      "description": "Run Magica tools directly."
+    },
+    {
+      "name": "Account",
+      "description": "Credits and media."
+    },
+    {
+      "name": "Webhooks",
+      "description": "What we send to your webhook URL."
+    }
+  ],
+  "paths": {
+    "/v1/messages": {
+      "post": {
+        "summary": "Send a message",
+        "description": "Sends a message to the agent, in a new chat or (with `chatId`) an existing one, and returns at once with the run to poll.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Makes the request safe to repeat: the same key with the same body (within 24 hours) returns the first answer without doing the work again (`idempotent-replayed: true`); a different body, or a repeat while the first is still running, is a 409 `IDEMPOTENCY_CONFLICT`. A request that failed can be repeated with the same key.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7e]{1,255}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted: the agent is working on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not enough credits (`INSUFFICIENT_CREDITS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not yours (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A conflict: a run is already active in the chat (`RUN_ACTIVE`), or the Idempotency-Key was used differently (`IDEMPOTENCY_CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 1 MB (`PAYLOAD_TOO_LARGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A service the request needs is unavailable right now (`SERVICE_UNAVAILABLE`): try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "Create a chat completion",
+        "description": "The chat-completions format, answered by the agent through the free model router (`model` must be `openrouter/free`). Not streamed. The conversation is kept as a chat. Waits about a minute for the answer; if it takes longer, answers 202 with the run to poll.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Makes the request safe to repeat: the same key with the same body (within 24 hours) returns the first answer without doing the work again (`idempotent-replayed: true`); a different body, or a repeat while the first is still running, is a 409 `IDEMPOTENCY_CONFLICT`. A request that failed can be repeated with the same key.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7e]{1,255}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletion"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Still working: poll `GET /v1/runs/{run_id}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionPending"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not enough credits (`INSUFFICIENT_CREDITS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A conflict: a run is already active in the chat (`RUN_ACTIVE`), or the Idempotency-Key was used differently (`IDEMPOTENCY_CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 1 MB (`PAYLOAD_TOO_LARGE`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A service the request needs is unavailable right now (`SERVICE_UNAVAILABLE`): try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chats": {
+      "get": {
+        "summary": "List chats",
+        "description": "Your chats, pinned first, then most recent. Pass `cursor` from one page to get the next.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of chats.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chats/{chatId}/messages": {
+      "get": {
+        "summary": "List a chat's messages",
+        "description": "Finished messages, oldest to newest within a page; `cursor` fetches older ones. A reply being written is read from its run.",
+        "tags": [
+          "Messages"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "description": "The chat.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not yours (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}": {
+      "get": {
+        "summary": "Get a run",
+        "description": "Where the run stands, its usage, its reply so far, the tool calls it made (with what they made), and what it waits for.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "description": "The run.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not yours (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runs/{runId}/cancel": {
+      "post": {
+        "summary": "Stop a run",
+        "description": "Stops the run if it is still going (what it wrote so far is kept), and returns it as it stands.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "description": "The run.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not yours (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/waitpoints/{waitpointId}/respond": {
+      "post": {
+        "summary": "Answer a waitpoint",
+        "description": "Approves a plan or a spend, asks for changes, or rejects. Answering one that is already closed returns it as it stands.",
+        "tags": [
+          "Runs"
+        ],
+        "parameters": [
+          {
+            "name": "waitpointId",
+            "in": "path",
+            "required": true,
+            "description": "The waitpoint (`pendingWaitpoint.id` of the run).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondWaitpointRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The waitpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespondWaitpointResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not yours (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A service the request needs is unavailable right now (`SERVICE_UNAVAILABLE`): try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tools/gpt-image-2": {
+      "post": {
+        "summary": "Run GPT Image 2",
+        "description": "Creates an image from a prompt, or edits images. Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll `GET /v1/tools/runs/{runId}`.",
+        "tags": [
+          "Tools"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Makes the request safe to repeat: the same key with the same body (within 24 hours) returns the first answer without doing the work again (`idempotent-replayed: true`); a different body, or a repeat while the first is still running, is a 409 `IDEMPOTENCY_CONFLICT`. A request that failed can be repeated with the same key.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7e]{1,255}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/GptImage2Input"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "webhook": {
+                        "$ref": "#/components/schemas/WebhookRequest"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolRunAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not enough credits (`INSUFFICIENT_CREDITS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A conflict: a run is already active in the chat (`RUN_ACTIVE`), or the Idempotency-Key was used differently (`IDEMPOTENCY_CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A service the request needs is unavailable right now (`SERVICE_UNAVAILABLE`): try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tools/crop-image": {
+      "post": {
+        "summary": "Run Crop Image",
+        "description": "Keeps a rectangle of an image. Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll `GET /v1/tools/runs/{runId}`.",
+        "tags": [
+          "Tools"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Makes the request safe to repeat: the same key with the same body (within 24 hours) returns the first answer without doing the work again (`idempotent-replayed: true`); a different body, or a repeat while the first is still running, is a 409 `IDEMPOTENCY_CONFLICT`. A request that failed can be repeated with the same key.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7e]{1,255}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/CropImageInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "webhook": {
+                        "$ref": "#/components/schemas/WebhookRequest"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolRunAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not enough credits (`INSUFFICIENT_CREDITS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A conflict: a run is already active in the chat (`RUN_ACTIVE`), or the Idempotency-Key was used differently (`IDEMPOTENCY_CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A service the request needs is unavailable right now (`SERVICE_UNAVAILABLE`): try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tools/merge-videos": {
+      "post": {
+        "summary": "Run Merge Videos",
+        "description": "Joins videos into one. Runs on its own, without a chat, and is charged like the agent's calls: reserved when it starts, charged once if it completes, given back otherwise. Poll `GET /v1/tools/runs/{runId}`.",
+        "tags": [
+          "Tools"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Makes the request safe to repeat: the same key with the same body (within 24 hours) returns the first answer without doing the work again (`idempotent-replayed: true`); a different body, or a repeat while the first is still running, is a 409 `IDEMPOTENCY_CONFLICT`. A request that failed can be repeated with the same key.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7e]{1,255}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/MergeVideosInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "webhook": {
+                        "$ref": "#/components/schemas/WebhookRequest"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolRunAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not enough credits (`INSUFFICIENT_CREDITS`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A conflict: a run is already active in the chat (`RUN_ACTIVE`), or the Idempotency-Key was used differently (`IDEMPOTENCY_CONFLICT`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A service the request needs is unavailable right now (`SERVICE_UNAVAILABLE`): try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tools/runs/{runId}": {
+      "get": {
+        "summary": "Get a tool run",
+        "description": "A tool run's status, input, credits, duration, what it made, and its error if it failed.",
+        "tags": [
+          "Tools"
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "description": "The tool run.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tool run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolRunResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not yours (`NOT_FOUND`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits": {
+      "get": {
+        "summary": "Get credits",
+        "description": "Your balance, and how much of it is held by work in progress.",
+        "tags": [
+          "Account"
+        ],
+        "responses": {
+          "200": {
+            "description": "Your credits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credits"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/media": {
+      "get": {
+        "summary": "List media",
+        "description": "Your media library: uploads (until they expire) and generated media, newest first.",
+        "tags": [
+          "Account"
+        ],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "upload",
+                "generated"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of media.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request isn't valid (`VALIDATION_FAILED`): `error` says which field and why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid API key or session token (`UNAUTHORIZED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A limit was reached (`RATE_LIMITED`): see `Retry-After` and `details`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "agent.started": {
+      "post": {
+        "summary": "Agent started",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "`agent.started`: The agent started working on the message. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "agent.completed": {
+      "post": {
+        "summary": "Agent completed",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "`agent.completed`: The agent finished: `data` has the reply's id, the model and usage (tokens and credits). Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "agent.failed": {
+      "post": {
+        "summary": "Agent failed",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "`agent.failed`: The agent couldn't finish: `error` says why and `data.code` is the stable reason. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "agent.canceled": {
+      "post": {
+        "summary": "Agent canceled",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "`agent.canceled`: The run was stopped. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "tool.completed": {
+      "post": {
+        "summary": "Tool completed",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "`tool.completed`: A paid tool call finished (in a run, or a standalone tool run): `data` has its input, credits and what it made. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    },
+    "tool.failed": {
+      "post": {
+        "summary": "Tool failed",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "`tool.failed`: A paid tool call failed: `error` says why. Nothing was charged. Verify the signature with the `svix` package and the `whsec_…` secret you were given; answer 2xx quickly (anything else is retried with backoff, about five times over half an hour), and treat a repeated `svix-id` as the same event.",
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "description": "The event's id: the same on every retry of it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "description": "When this attempt was sent (seconds since the epoch).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "description": "`v1,` and the base64 HMAC-SHA256 of `<svix-id>.<svix-timestamp>.<body>`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "An API key (`mgc_…`) from API / MCP in the app."
+      },
+      "Bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An API key (`Bearer mgc_…`), or a signed-in session token."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "UNAUTHORIZED",
+              "VALIDATION_FAILED",
+              "NOT_FOUND",
+              "RUN_ACTIVE",
+              "RUN_NOT_RETRYABLE",
+              "API_KEY_LIMIT_REACHED",
+              "IDEMPOTENCY_CONFLICT",
+              "INSUFFICIENT_CREDITS",
+              "PAYLOAD_TOO_LARGE",
+              "RATE_LIMITED",
+              "UPLOAD_LIMIT_REACHED",
+              "SERVICE_UNAVAILABLE",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "details": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "traceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "traceId"
+        ],
+        "additionalProperties": false
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 32000
+          },
+          "attachments": {
+            "default": [],
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mediaAssetId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                }
+              },
+              "required": [
+                "mediaAssetId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "mode": {
+            "default": "default",
+            "type": "string",
+            "enum": [
+              "default",
+              "plan"
+            ]
+          },
+          "chatId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "events": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "agent.started",
+                    "agent.completed",
+                    "agent.failed",
+                    "agent.canceled",
+                    "tool.completed",
+                    "tool.failed"
+                  ]
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "MessageAccepted": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "chatId",
+          "messageId",
+          "runId",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ChatList": {
+        "type": "object",
+        "properties": {
+          "chats": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "userId": {
+                  "type": "string"
+                },
+                "isPinned": {
+                  "type": "boolean"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "lastMessageAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "_count": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "userId",
+                "isPinned",
+                "createdAt",
+                "updatedAt",
+                "lastMessageAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "chats",
+          "cursor"
+        ],
+        "additionalProperties": false
+      },
+      "MessageList": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "chatId": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "USER",
+                    "ASSISTANT",
+                    "SYSTEM",
+                    "TOOL"
+                  ]
+                },
+                "content": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "contentBlocks": {},
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "COMPLETED",
+                    "FAILED",
+                    "CANCELLED",
+                    "STREAMING"
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "agentRunId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "clientMessageId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "errorMessage": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "canRetry": {
+                  "type": "boolean"
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "upload",
+                          "generated"
+                        ]
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "image",
+                          "video",
+                          "audio"
+                        ]
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "prompt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "model": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "width": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "height": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "mimeType": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      "expiresAt": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "expired": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "source",
+                      "type",
+                      "url",
+                      "name",
+                      "prompt",
+                      "model",
+                      "width",
+                      "height",
+                      "mimeType",
+                      "createdAt",
+                      "expiresAt",
+                      "expired"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "chatId",
+                "role",
+                "content",
+                "contentBlocks",
+                "status",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "messages",
+          "cursor"
+        ],
+        "additionalProperties": false
+      },
+      "RunResponse": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "chatId": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "queued",
+                  "running",
+                  "waiting",
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "plan"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "outputTokens": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "credits": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "credits"
+                ],
+                "additionalProperties": false
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reply": {
+                "type": "object",
+                "properties": {
+                  "messageId": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "assets": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "image",
+                            "video",
+                            "audio"
+                          ]
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "mimeType": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "width": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "height": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "url",
+                        "mimeType",
+                        "width",
+                        "height"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "messageId",
+                  "text",
+                  "assets"
+                ],
+                "additionalProperties": false
+              },
+              "toolCalls": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "completed",
+                        "failed",
+                        "cancelled"
+                      ]
+                    },
+                    "input": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    "credits": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "durationMs": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "assets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "image",
+                              "video",
+                              "audio"
+                            ]
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "mimeType": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "width": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "height": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "url",
+                          "mimeType",
+                          "width",
+                          "height"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    "completedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "tool",
+                    "status",
+                    "input",
+                    "credits",
+                    "durationMs",
+                    "assets",
+                    "error",
+                    "createdAt",
+                    "completedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "pendingWaitpoint": {
+                "anyOf": [
+                  {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "changes_requested",
+                              "rejected",
+                              "expired",
+                              "cancelled"
+                            ]
+                          },
+                          "feedback": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "resolvedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "plan"
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "title": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "overview": {
+                                "type": "string",
+                                "maxLength": 2000
+                              },
+                              "steps": {
+                                "minItems": 1,
+                                "maxItems": 20,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "title": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 1000
+                                    },
+                                    "tool": {
+                                      "type": "string",
+                                      "maxLength": 64
+                                    },
+                                    "estimatedCredits": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 1000000000
+                                    }
+                                  },
+                                  "required": [
+                                    "title",
+                                    "estimatedCredits"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "notes": {
+                                "type": "string",
+                                "maxLength": 2000
+                              },
+                              "totalCredits": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "title",
+                              "overview",
+                              "steps",
+                              "totalCredits"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "runId",
+                          "status",
+                          "feedback",
+                          "expiresAt",
+                          "createdAt",
+                          "resolvedAt",
+                          "type",
+                          "payload"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "approved",
+                              "changes_requested",
+                              "rejected",
+                              "expired",
+                              "cancelled"
+                            ]
+                          },
+                          "feedback": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "resolvedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "type": "string",
+                            "const": "credit"
+                          },
+                          "payload": {
+                            "type": "object",
+                            "properties": {
+                              "calls": {
+                                "minItems": 1,
+                                "maxItems": 100,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "toolCallId": {
+                                      "type": "string"
+                                    },
+                                    "toolName": {
+                                      "type": "string"
+                                    },
+                                    "credits": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "toolCallId",
+                                    "toolName",
+                                    "credits"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "totalCredits": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "threshold": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "calls",
+                              "totalCredits"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "runId",
+                          "status",
+                          "feedback",
+                          "expiresAt",
+                          "createdAt",
+                          "resolvedAt",
+                          "type",
+                          "payload"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "startedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "completedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "chatId",
+              "status",
+              "mode",
+              "model",
+              "usage",
+              "error",
+              "reply",
+              "toolCalls",
+              "pendingWaitpoint",
+              "createdAt",
+              "startedAt",
+              "completedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "RespondWaitpointRequest": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "request_changes",
+              "reject"
+            ]
+          },
+          "feedback": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "RespondWaitpointResponse": {
+        "type": "object",
+        "properties": {
+          "waitpoint": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "runId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "approved",
+                      "changes_requested",
+                      "rejected",
+                      "expired",
+                      "cancelled"
+                    ]
+                  },
+                  "feedback": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "resolvedAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "plan"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "overview": {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      "steps": {
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "title": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 1000
+                            },
+                            "tool": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "estimatedCredits": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000000
+                            }
+                          },
+                          "required": [
+                            "title",
+                            "estimatedCredits"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "notes": {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      "totalCredits": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "overview",
+                      "steps",
+                      "totalCredits"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "runId",
+                  "status",
+                  "feedback",
+                  "expiresAt",
+                  "createdAt",
+                  "resolvedAt",
+                  "type",
+                  "payload"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "runId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "approved",
+                      "changes_requested",
+                      "rejected",
+                      "expired",
+                      "cancelled"
+                    ]
+                  },
+                  "feedback": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "resolvedAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "credit"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "calls": {
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "toolCallId": {
+                              "type": "string"
+                            },
+                            "toolName": {
+                              "type": "string"
+                            },
+                            "credits": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "toolCallId",
+                            "toolName",
+                            "credits"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "totalCredits": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "threshold": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "calls",
+                      "totalCredits"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "runId",
+                  "status",
+                  "feedback",
+                  "expiresAt",
+                  "createdAt",
+                  "resolvedAt",
+                  "type",
+                  "payload"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "waitpoint"
+        ],
+        "additionalProperties": false
+      },
+      "Credits": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "held": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "balance",
+          "held"
+        ],
+        "additionalProperties": false
+      },
+      "MediaList": {
+        "type": "object",
+        "properties": {
+          "media": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "upload",
+                    "generated"
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "image",
+                    "video",
+                    "audio"
+                  ]
+                },
+                "url": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "prompt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "width": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "height": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "mimeType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                },
+                "expiresAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "source",
+                "type",
+                "url",
+                "name",
+                "prompt",
+                "model",
+                "width",
+                "height",
+                "mimeType",
+                "createdAt",
+                "expiresAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "media",
+          "cursor",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "GptImage2Input": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "text",
+              "edit"
+            ],
+            "description": "text: create a new image from the prompt. edit: change the image(s) in image_urls as the prompt says."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "description": "What to create, or how to change the image."
+          },
+          "image_urls": {
+            "description": "Edit mode only: the image(s) to start from.",
+            "minItems": 1,
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            }
+          },
+          "size": {
+            "default": "auto",
+            "type": "string",
+            "enum": [
+              "auto",
+              "1024x1024",
+              "1536x1024",
+              "1024x1536",
+              "2048x2048",
+              "2048x1152",
+              "3840x2160",
+              "2160x3840"
+            ]
+          },
+          "quality": {
+            "default": "medium",
+            "description": "Higher quality is slower.",
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "background": {
+            "default": "auto",
+            "type": "string",
+            "enum": [
+              "auto",
+              "opaque",
+              "transparent"
+            ]
+          },
+          "n": {
+            "default": 1,
+            "description": "How many images to make.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "output_format": {
+            "default": "png",
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "prompt"
+        ]
+      },
+      "CropImageInput": {
+        "type": "object",
+        "properties": {
+          "image_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri",
+            "description": "The image to crop."
+          },
+          "crop": {
+            "description": "The rectangle to keep: top-left corner (x, y) and size, in percent of the image (default) or pixels.",
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Left edge of the rectangle."
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Top edge of the rectangle."
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "unit": {
+                "default": "percent",
+                "description": "percent (the default): every value is 0-100, a share of the image's size. pixel: whole pixels; set it whenever the values are pixels.",
+                "type": "string",
+                "enum": [
+                  "percent",
+                  "pixel"
+                ]
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ]
+          },
+          "x_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "y_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "width_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "height_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "x_px": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "y_px": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "width_px": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "height_px": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "image_url"
+        ]
+      },
+      "MergeVideosInput": {
+        "type": "object",
+        "properties": {
+          "video_urls": {
+            "minItems": 2,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            },
+            "description": "The videos to join, in the order they should play."
+          },
+          "transition": {
+            "default": "none",
+            "description": "The effect between clips.",
+            "type": "string",
+            "enum": [
+              "none",
+              "fade",
+              "dissolve"
+            ]
+          }
+        },
+        "required": [
+          "video_urls"
+        ]
+      },
+      "ToolRunAccepted": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "runId",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ToolRunResponse": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ]
+              },
+              "input": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "credits": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "durationMs": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "assets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "image",
+                        "video",
+                        "audio"
+                      ]
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "mimeType": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "width": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "height": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "url",
+                    "mimeType",
+                    "width",
+                    "height"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              },
+              "completedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "tool",
+              "status",
+              "input",
+              "credits",
+              "durationMs",
+              "assets",
+              "error",
+              "createdAt",
+              "completedAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "ChatCompletionRequest": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "openrouter/free",
+            "description": "The model: the free model router."
+          },
+          "messages": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "system",
+                    "developer",
+                    "user",
+                    "assistant"
+                  ]
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "text"
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "role",
+                "content"
+              ]
+            }
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "events": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "agent.started",
+                    "agent.completed",
+                    "agent.failed",
+                    "agent.canceled",
+                    "tool.completed",
+                    "tool.failed"
+                  ]
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "model",
+          "messages"
+        ],
+        "additionalProperties": {}
+      },
+      "ChatCompletion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "const": "chat.completion"
+          },
+          "created": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "model": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "const": "assistant"
+                    },
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "additionalProperties": false
+                },
+                "finish_reason": {
+                  "type": "string",
+                  "const": "stop"
+                }
+              },
+              "required": [
+                "index",
+                "message",
+                "finish_reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "completion_tokens": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "total_tokens": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "prompt_tokens",
+              "completion_tokens",
+              "total_tokens"
+            ],
+            "additionalProperties": false
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices",
+          "usage",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "ChatCompletionPending": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "chat.completion.pending"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "chat_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "waiting",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "webhook": {
+            "type": "object",
+            "properties": {
+              "signingSecret": {
+                "type": "string",
+                "format": "starts_with",
+                "pattern": "^whsec_.*"
+              }
+            },
+            "required": [
+              "signingSecret"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "object",
+          "run_id",
+          "chat_id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookRequest": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "events": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "agent.started",
+                "agent.completed",
+                "agent.failed",
+                "agent.canceled",
+                "tool.completed",
+                "tool.failed"
+              ]
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookRegistered": {
+        "type": "object",
+        "properties": {
+          "signingSecret": {
+            "type": "string",
+            "format": "starts_with",
+            "pattern": "^whsec_.*"
+          }
+        },
+        "required": [
+          "signingSecret"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "agent.started",
+              "agent.completed",
+              "agent.failed",
+              "agent.canceled",
+              "tool.completed",
+              "tool.failed"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "success",
+          "type",
+          "runId",
+          "data",
+          "metadata",
+          "error",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

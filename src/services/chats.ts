@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { prisma, Prisma } from "#src/db/client.js";
-import type { ChatListQuerySchema, ChatListResponseSchema, UpdateChatBody } from "#src/contracts/index.js";
+import type { Chat as ChatRow } from "#src/generated/prisma/client.js";
+import type { ChatListQuerySchema, ChatListResponseSchema, ChatSearchQuery, UpdateChatBody } from "#src/contracts/index.js";
 import { AppError } from "#src/lib/errors.js";
 import { CursorTimestampSchema, IdSchema, decodeCursor, encodeCursor } from "#src/lib/cursor.js";
+import { containsPattern } from "#src/lib/search.js";
 import { cancelTriggerRun } from "#src/lib/trigger.js";
 import { ACTIVE_STATUSES, finalizeRun } from "#src/services/runs.js";
 import { serializeChat } from "#src/services/serialize.js";
@@ -55,6 +57,37 @@ export async function listChats(userId: string, { cursor, limit }: ChatListQuery
   return {
     chats: page.map(serializeChat),
     cursor: rows.length > limit && last ? encodeCursor([last.isPinned ? 1 : 0, last.lastMessageAt.toISOString(), last.id]) : null,
+  };
+}
+
+const SearchCursorSchema = z.tuple([CursorTimestampSchema, IdSchema]);
+
+export { containsPattern } from "#src/lib/search.js";
+
+/**
+ * The caller's chats whose title or any message contains `q` (ignoring case), most recent activity first, one entry per
+ * chat. Both columns have trigram indexes, so a match is found through the index rather than by reading every message;
+ * the message side is a semi-join (IN), which the planner can drive from that index.
+ */
+export async function searchChats(userId: string, { q, cursor, limit }: ChatSearchQuery, db: Pick<typeof prisma, "$queryRaw"> = prisma): Promise<ChatListResponse> {
+  const after = cursor ? decodeCursor(cursor, SearchCursorSchema) : undefined;
+  const pattern = containsPattern(q);
+  const rows = await db.$queryRaw<ChatRow[]>`
+    SELECT c."id", c."userId", c."title", c."isPinned", c."lastMessageAt", c."createdAt", c."updatedAt"
+    FROM "Chat" c
+    WHERE c."userId" = ${userId}
+      AND (
+        c."title" ILIKE ${pattern}
+        OR c."id" IN (SELECT m."chatId" FROM "Message" m WHERE m."userId" = ${userId} AND m."content" ILIKE ${pattern})
+      )
+      ${after ? Prisma.sql`AND (c."lastMessageAt", c."id") < (${after[0].toISOString()}::timestamp(3), ${after[1]})` : Prisma.empty}
+    ORDER BY c."lastMessageAt" DESC, c."id" DESC
+    LIMIT ${limit + 1}`;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    chats: page.map(serializeChat),
+    cursor: rows.length > limit && last ? encodeCursor([last.lastMessageAt.toISOString(), last.id]) : null,
   };
 }
 

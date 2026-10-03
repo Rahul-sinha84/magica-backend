@@ -4,7 +4,7 @@ import type { MagicaToolPayload } from "#src/agent/payload.js";
 import type { ChatMessage, ToolCallEvent } from "#src/lib/openrouter.js";
 import { createInvocation, endInvocation, InsufficientCreditsForTool } from "#src/services/toolInvocations.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
-import { displayInput, displayResult, sanitizeInput, type ToolDefinition, type ToolRegistry } from "#src/tools/registry.js";
+import { displayInput, displayResult, sanitizeInput, type ToolDefinition, type ToolRegistry, type WaitFor } from "#src/tools/registry.js";
 
 // One step's tool calls: check each, run them (inline tools at once, Magica tools as one batch of durable child tasks),
 // stream their progress, and turn their outcomes into the messages the model reads next. Results always go back in
@@ -29,6 +29,23 @@ export interface ToolStepDeps {
   step: number;
   /** Saves the reply so far; called once the tool cards have started, so a reload mid-tool shows them running. */
   checkpoint?: () => Promise<void>;
+  /** Pauses the turn until the user answers; `key` names the asking within the run. Absent when the turn can't wait. */
+  waitFor?: (key: string) => WaitFor;
+  /** Why the turn won't run this tool right now (plan mode before a plan is approved), or null. Asked once per call, in order. */
+  refuse?: (tool: ToolDefinition) => Refusal | null;
+  /**
+   * Spend approval: paid calls in one step costing more than `threshold` credits wait for the user to approve them,
+   * unless `covered` (an approved plan covers the turn's spend). Absent: no approval is asked for.
+   */
+  spendApproval?: { threshold: number; covered: boolean };
+}
+
+/** A tool the turn won't run: what the tool card shows, and (when it should be put differently) what the model reads. */
+export interface Refusal {
+  message: string;
+  forModel?: string;
+  /** No card at all: the model's misstep, not a step of the work (the model still reads why). */
+  hidden?: boolean;
 }
 
 export interface ToolStepResult {
@@ -39,13 +56,18 @@ export interface ToolStepResult {
 }
 
 type Planned =
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; forModel?: string; hidden?: boolean }
   | { kind: "inline"; tool: ToolDefinition; input: unknown }
   | { kind: "magica"; tool: ToolDefinition; input: unknown };
 
-type Outcome = { ok: true; output: unknown; durationMs: number; creditCost: number; tool: ToolDefinition; input: unknown } | { ok: false; message: string; durationMs?: number };
+// A failure's `message` is what the tool card shows; `forModel`, when the model needs it put differently, is what it reads.
+type Outcome = { ok: true; output: unknown; durationMs: number; creditCost: number; tool: ToolDefinition; input: unknown } | { ok: false; message: string; forModel?: string; durationMs?: number };
 
 const OUT_OF_CREDITS = "You don't have enough credits for this.";
+export const SPEND_DECLINED = "You declined this spend.";
+// the card speaks to the user; the model must not read "you declined" as something it did, nor try again on its own
+export const SPEND_DECLINED_FOR_MODEL = "The user declined this spend, so this call wasn't made and nothing was charged. Don't try it again unless the user asks; tell them what you would have done.";
+const NO_APPROVAL = "This spend needs the user's approval, and approvals aren't available right now.";
 
 /** Every http(s) link in a text, without trailing punctuation. */
 export function linksIn(text: string): string[] {
@@ -56,12 +78,13 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
   const { registry, emit, setStatus, now, log } = deps;
   const keyOf = (call: ToolCallEvent) => `s${deps.step}-${call.id}`;
 
-  // 1. Check every call before running any, and show each one starting.
+  // 1. Check every call before running any, and show each one starting (except a hidden refusal, which shows nothing).
+  const hidden = (plan: Planned | undefined) => plan?.kind === "error" && plan.hidden === true;
   const plans: Planned[] = calls.map((call) => {
-    const plan = planCall(call, registry, deps.knownUrls);
+    const plan = planCall(call, registry, deps.knownUrls, deps.refuse);
     const tool = plan.kind === "error" ? undefined : plan.tool;
     const shown = tool && plan.kind !== "error" ? displayInput(tool, plan.input) : (sanitizeInput(call.input ?? {}) as Record<string, unknown>);
-    emit({ type: "tool-start", toolCallId: keyOf(call), toolName: call.name || "unknown", toolInput: shown });
+    if (!hidden(plan)) emit({ type: "tool-start", toolCallId: keyOf(call), toolName: call.name || "unknown", toolInput: shown });
     return plan;
   });
   const firstRunnable = plans.findIndex((plan) => plan.kind !== "error");
@@ -73,22 +96,41 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
 
   await deps.checkpoint?.();
 
-  const outcomes: Outcome[] = plans.map((plan) => (plan.kind === "error" ? { ok: false, message: plan.message } : { ok: false, message: "Not run." }));
+  const outcomes: Outcome[] = plans.map((plan) => (plan.kind === "error" ? { ok: false, message: plan.message, ...(plan.forModel && { forModel: plan.forModel }) } : { ok: false, message: "Not run." }));
 
   // 2. Inline tools (the skill tools) run at once.
   const context = { agentRunId: deps.agentRunId, chatId: deps.chatId, userId: deps.userId, log, signal: deps.signal };
   await Promise.all(
     plans.map(async (plan, i) => {
-      if (plan.kind !== "inline") return;
+      const call = calls[i];
+      if (plan.kind !== "inline" || !call) return;
       const started = now();
-      const result = await registry.execute(plan.tool.name, plan.input, context);
+      // a tool that asks the user something asks under its own call, so asking again (same call) gives the same waitpoint
+      const result = await registry.execute(plan.tool.name, plan.input, { ...context, ...(deps.waitFor && { waitFor: deps.waitFor(keyOf(call)) }) });
       outcomes[i] = result.ok ? { ok: true, output: result.output, durationMs: now() - started, creditCost: 0, tool: plan.tool, input: plan.input } : { ok: false, message: result.message, durationMs: now() - started };
     }),
   );
 
-  // 3. Magica tools: record each and reserve its credits, then run them all as one batch of child tasks.
+  // 3. Magica tools: record each and reserve its credits, then run them all as one batch of child tasks. If together
+  // they cost more than the approval threshold (and no approved plan covers it), the user approves the spend first; a
+  // declined spend fails those calls, charging nothing, and the model reads why.
   let outOfCredits = false;
-  const magicaIndexes = plans.flatMap((plan, i) => (plan.kind === "magica" ? [i] : []));
+  let magicaIndexes = plans.flatMap((plan, i) => (plan.kind === "magica" ? [i] : []));
+  const paid = magicaIndexes.flatMap((i) => {
+    const plan = plans[i];
+    const call = calls[i];
+    return plan?.kind === "magica" && call ? [{ toolCallId: keyOf(call), toolName: plan.tool.name, credits: plan.tool.creditCost }] : [];
+  });
+  const total = paid.reduce((sum, call) => sum + call.credits, 0);
+  const approval = deps.spendApproval;
+  if (approval && !approval.covered && paid.length > 0 && total > approval.threshold) {
+    const ask = deps.waitFor?.(`s${deps.step}-credit`);
+    const answer = ask ? await ask("credit", { calls: paid, totalCredits: total, threshold: approval.threshold }) : null;
+    if (answer?.status !== "approved") {
+      for (const i of magicaIndexes) outcomes[i] = answer ? { ok: false, message: SPEND_DECLINED, forModel: SPEND_DECLINED_FOR_MODEL } : { ok: false, message: NO_APPROVAL };
+      magicaIndexes = [];
+    }
+  }
   const recorded: { index: number; invocationId: string }[] = [];
   for (const i of magicaIndexes) {
     const plan = plans[i];
@@ -137,8 +179,8 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
       }
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.output) });
     } else {
-      emit({ type: "tool-end", toolCallId: keyOf(call), status: "failed", errorMessage: outcome.message, ...(outcome.durationMs !== undefined && { durationMs: Math.max(0, Math.round(outcome.durationMs)) }) });
-      messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: outcome.message }) });
+      if (!hidden(plans[i])) emit({ type: "tool-end", toolCallId: keyOf(call), status: "failed", errorMessage: outcome.message, ...(outcome.durationMs !== undefined && { durationMs: Math.max(0, Math.round(outcome.durationMs)) }) });
+      messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: outcome.forModel ?? outcome.message }) });
     }
   });
   // say explicitly that the tools are done (an update, delivered like any other), rather than only removing the field
@@ -154,10 +196,12 @@ export async function runToolStep(calls: ToolCallEvent[], deps: ToolStepDeps): P
 }
 
 /** Whether a call can run, and how; or why not, in words the model can act on. */
-function planCall(call: ToolCallEvent, registry: ToolRegistry, knownUrls: Set<string>): Planned {
+function planCall(call: ToolCallEvent, registry: ToolRegistry, knownUrls: Set<string>, refuse?: (tool: ToolDefinition) => Refusal | null): Planned {
   if (call.malformed) return { kind: "error", message: `Invalid tool call: ${call.malformed}.` };
   const parsed = registry.parseInput(call.name, call.input ?? {});
   if (!parsed.ok) return { kind: "error", message: parsed.message };
+  const refused = refuse?.(parsed.tool);
+  if (refused) return { kind: "error", ...refused };
   const unknown = (parsed.tool.mediaUrls?.(parsed.input) ?? []).filter((url) => !knownUrls.has(url));
   if (unknown.length > 0) {
     return { kind: "error", message: `${unknown.length === 1 ? "This link doesn't" : "These links don't"} appear in the conversation: ${unknown.slice(0, 3).join(", ")}. Use the exact link from the conversation.` };

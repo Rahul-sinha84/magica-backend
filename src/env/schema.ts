@@ -21,6 +21,14 @@ export const BaseEnvSchema = z.object({
   OPENROUTER_MODEL: z
     .literal("openrouter/free", { error: 'must be "openrouter/free" (paid models are not allowed)' })
     .default("openrouter/free"),
+  // Encrypts webhook signing secrets at rest (AES-256-GCM): 32 random bytes as 64 hex characters (`openssl rand -hex
+  // 32`). The API encrypts with it and the worker decrypts to sign deliveries, so both need the same value. Optional:
+  // without it, asking for a webhook is answered "unavailable".
+  WEBHOOK_SECRET_KEY: z
+    .string()
+    .trim()
+    .regex(/^[0-9a-fA-F]{64}$/, { error: "must be 64 hex characters (openssl rand -hex 32)" })
+    .optional(),
 });
 
 export const ServerEnvSchema = BaseEnvSchema.extend({
@@ -37,10 +45,25 @@ export const ServerEnvSchema = BaseEnvSchema.extend({
   TRIGGER_SECRET_KEY: key.startsWith("tr_"),
   CREDIT_STARTING_BALANCE: credits.default(30_000_000),
   CREDIT_ADMISSION_HOLD: credits.default(100_000),
-}).refine((e) => e.CREDIT_ADMISSION_HOLD <= e.CREDIT_STARTING_BALANCE, {
-  path: ["CREDIT_ADMISSION_HOLD"],
-  error: "must not exceed CREDIT_STARTING_BALANCE",
-});
+  // Transloadit (Community plan) for direct uploads: the API signs each upload with these, so the secret never reaches
+  // the browser. Optional: without them the API still starts and uploads answer "unavailable" (set both, or neither).
+  TRANSLOADIT_AUTH_KEY: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }).optional(),
+  TRANSLOADIT_AUTH_SECRET: key.regex(/^\S+$/, { error: "must not contain spaces or line breaks" }).optional(),
+  // This API's own public https address (e.g. the Railway domain). When set, Transloadit is asked to report finished
+  // uploads to it directly, so an upload completes even if the browser closes. Unset in development (not reachable).
+  PUBLIC_API_URL: z
+    .url({ protocol: /^https$/, error: "must be the API's public https address" })
+    .transform((u) => new URL(u).origin)
+    .optional(),
+})
+  .refine((e) => !e.TRANSLOADIT_AUTH_KEY === !e.TRANSLOADIT_AUTH_SECRET, {
+    path: ["TRANSLOADIT_AUTH_SECRET"],
+    error: "set both TRANSLOADIT_AUTH_KEY and TRANSLOADIT_AUTH_SECRET, or neither",
+  })
+  .refine((e) => e.CREDIT_ADMISSION_HOLD <= e.CREDIT_STARTING_BALANCE, {
+    path: ["CREDIT_ADMISSION_HOLD"],
+    error: "must not exceed CREDIT_STARTING_BALANCE",
+  });
 
 export const WorkerEnvSchema = BaseEnvSchema.extend({
   OPENROUTER_API_KEY: key,
@@ -48,6 +71,9 @@ export const WorkerEnvSchema = BaseEnvSchema.extend({
   // How many turns run at once; the rest wait in Trigger.dev's queue (and never fail for waiting). The free model's
   // rate limit is the real ceiling, so raising this mostly turns waiting into 429s. Read when the task is indexed.
   AGENT_CONCURRENCY_LIMIT: z.coerce.number().int().min(1).max(1000).default(20),
+  // A step whose paid tool calls cost more than this (in credits) waits for the user to approve the spend, unless an
+  // approved plan covers it. The default lets a single image (1,000,000) run without asking.
+  CREDIT_APPROVAL_THRESHOLD: z.coerce.number().int().min(0).max(1_000_000_000).default(2_000_000),
   // Magica's model API (Crop Image, GPT Image 2, Merge Videos). Only the worker calls it, so only the worker has the
   // key. The base URL is configuration with no default, so no environment's host is ever baked into the code.
   // a pasted key with a space or line break inside would only fail later, as a confusing 401

@@ -108,6 +108,47 @@ describe("server env", () => {
   });
 });
 
+describe("server env: Transloadit", () => {
+  it("is optional: the API starts without it (uploads then answer unavailable)", () => {
+    const parsed = parseServer();
+    expect(parsed.TRANSLOADIT_AUTH_KEY).toBeUndefined();
+    expect(parsed.TRANSLOADIT_AUTH_SECRET).toBeUndefined();
+  });
+
+  it("takes both, trimmed", () => {
+    expect(parseServer({ TRANSLOADIT_AUTH_KEY: " key123 ", TRANSLOADIT_AUTH_SECRET: "secret456\n" })).toMatchObject({ TRANSLOADIT_AUTH_KEY: "key123", TRANSLOADIT_AUTH_SECRET: "secret456" });
+  });
+
+  it.each([
+    ["only the key", { TRANSLOADIT_AUTH_KEY: "key123" }],
+    ["only the secret", { TRANSLOADIT_AUTH_SECRET: "secret456" }],
+  ])("refuses %s", (_label, overrides) => {
+    expect(() => parseServer(overrides)).toThrow(/set both TRANSLOADIT_AUTH_KEY and TRANSLOADIT_AUTH_SECRET, or neither/);
+  });
+
+  it("refuses a pasted value with a space or line break inside, without repeating it", () => {
+    let message = "";
+    try {
+      parseServer({ TRANSLOADIT_AUTH_KEY: "key123", TRANSLOADIT_AUTH_SECRET: "sec ret" });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/TRANSLOADIT_AUTH_SECRET/);
+    expect(message).not.toContain("sec ret");
+  });
+});
+
+describe("server env: PUBLIC_API_URL", () => {
+  it("is optional, and kept as a bare https origin", () => {
+    expect(parseServer().PUBLIC_API_URL).toBeUndefined();
+    expect(parseServer({ PUBLIC_API_URL: "https://api.example.com/some/path/" }).PUBLIC_API_URL).toBe("https://api.example.com");
+  });
+
+  it.each(["http://api.example.com", "not a url", "ftp://api.example.com"])("refuses %s", (value) => {
+    expect(() => parseServer({ PUBLIC_API_URL: value })).toThrow(/PUBLIC_API_URL/);
+  });
+});
+
 describe("worker env", () => {
   it("parses without Clerk or Trigger keys", () => {
     expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({
@@ -121,7 +162,8 @@ describe("worker env", () => {
   });
 
   it("defaults to 20 turns at once and 10 database connections, and accepts other sensible values", () => {
-    expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 20, DATABASE_POOL_MAX: 10 });
+    expect(parseEnv(WorkerEnvSchema, worker)).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 20, DATABASE_POOL_MAX: 10, CREDIT_APPROVAL_THRESHOLD: 2_000_000 });
+    expect(parseEnv(WorkerEnvSchema, { ...worker, CREDIT_APPROVAL_THRESHOLD: "0" })).toMatchObject({ CREDIT_APPROVAL_THRESHOLD: 0 });
     expect(parseEnv(WorkerEnvSchema, { ...worker, AGENT_CONCURRENCY_LIMIT: "1000", DATABASE_POOL_MAX: "1" })).toMatchObject({ AGENT_CONCURRENCY_LIMIT: 1000, DATABASE_POOL_MAX: 1 });
   });
 
@@ -130,6 +172,9 @@ describe("worker env", () => {
     ["AGENT_CONCURRENCY_LIMIT", "1001"],
     ["AGENT_CONCURRENCY_LIMIT", "2.5"],
     ["AGENT_CONCURRENCY_LIMIT", "lots"],
+    ["CREDIT_APPROVAL_THRESHOLD", "-1"],
+    ["CREDIT_APPROVAL_THRESHOLD", "1.5"],
+    ["CREDIT_APPROVAL_THRESHOLD", "a lot"],
     ["DATABASE_POOL_MAX", "0"],
     ["DATABASE_POOL_MAX", "101"],
   ])("rejects %s=%s", (key, value) => {

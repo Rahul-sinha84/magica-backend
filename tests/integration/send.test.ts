@@ -188,10 +188,13 @@ describe("what a send refuses, and leaves untouched", () => {
     await nothingHappened("u1", before);
   });
 
-  it("says plainly that attachments are not supported yet", async () => {
+  it("refuses a raw link as an attachment (files come from the user's library), changing nothing", async () => {
     const chat = await newChat("u1");
+    const before = await counts();
     const res = await send("u1", chat, { content: "hi", attachments: ["https://cdn.example.com/a.png"] });
-    expect(ErrorResponseSchema.parse(res.body).error).toMatch(/attachments.*aren't supported yet/i);
+    expect(res.status).toBe(400);
+    expect(ErrorResponseSchema.parse(res.body).code).toBe("VALIDATION_FAILED");
+    await nothingHappened("u1", before);
   });
 
   it("rejects a request with no body, or a body of another content type", async () => {
@@ -567,7 +570,7 @@ describe("when the agent cannot be started", () => {
     trigger.dispatchHangs = true;
     const started = Date.now();
     await expect(
-      sendMessage({ userId: "u1", chatId: chat, body: { content: "Hangs", attachments: [] }, traceId: "t" }, { dispatchTimeoutMs: 150 }),
+      sendMessage({ userId: "u1", chatId: chat, body: { content: "Hangs", attachments: [], mode: "default" }, traceId: "t" }, { dispatchTimeoutMs: 150 }),
     ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
     expect(Date.now() - started).toBeLessThan(2_000);
     await expectUndone("u1", chat, { messages: 0, runs: 0, dispatches: 0 }, lastMessageAt);
@@ -708,5 +711,118 @@ describe("the send limiter in the full app", () => {
     expect((await api(tight).get("/api/credits").set("Authorization", "Bearer test:u1")).status).toBe(200);
     expect((await post("u2", other)).status).toBe(201);
     expect(await prisma.agentRun.count({ where: { userId: "u1" } })).toBe(2); // the blocked send created nothing
+  });
+});
+
+describe("attachments: files from the user's library", () => {
+  const HOUR = 3_600_000;
+  async function file(userId: string, data: { source?: "UPLOAD" | "GENERATED"; name?: string; expiresInHours?: number } = {}) {
+    const upload = (data.source ?? "UPLOAD") === "UPLOAD";
+    return prisma.mediaAsset.create({
+      data: {
+        userId,
+        source: upload ? "UPLOAD" : "GENERATED",
+        type: "IMAGE",
+        url: `https://cdn.test/${crypto.randomUUID()}.png`,
+        ...(upload ? { name: data.name ?? "photo.png", expiresAt: new Date(Date.now() + (data.expiresInHours ?? 20) * HOUR) } : { prompt: "a fox", model: "GPT Image 2" }),
+      },
+    });
+  }
+  const refs = (...ids: string[]) => ids.map((mediaAssetId) => ({ mediaAssetId }));
+  const listMessages = async (user: string, chatId: string) => (await as(user).get(`/api/chats/${chatId}/messages`)).body as { messages: { role: string; attachments?: { id: string; expired: boolean; name: string | null; source: string }[] }[] };
+
+  it("attaches files in the order given and returns them with the message", async () => {
+    const chat = await newChat("u1");
+    const [photo, generated] = [await file("u1", { name: "beach.png" }), await file("u1", { source: "GENERATED" })];
+    const res = await send("u1", chat, { content: "Crop the first one", attachments: refs(photo.id, generated.id) });
+    expect(res.status).toBe(201);
+    const body = SendMessageResponseSchema.parse(res.body);
+    expect(body.message.attachments?.map((a) => [a.id, a.source, a.name, a.expired])).toEqual([
+      [photo.id, "upload", "beach.png", false],
+      [generated.id, "generated", null, false],
+    ]);
+    expect(await prisma.attachment.findMany({ orderBy: { position: "asc" }, select: { mediaAssetId: true, position: true, messageId: true } })).toEqual([
+      { mediaAssetId: photo.id, position: 0, messageId: body.message.id },
+      { mediaAssetId: generated.id, position: 1, messageId: body.message.id },
+    ]);
+  });
+
+  it("lists them on the user's message, in order, marking an upload expired once it's past its lifetime", async () => {
+    const chat = await newChat("u1");
+    const [a, b] = [await file("u1", { name: "a.png" }), await file("u1", { name: "b.png" })];
+    expect((await send("u1", chat, { content: "two files", attachments: refs(b.id, a.id) })).status).toBe(201);
+    const listed = (await listMessages("u1", chat)).messages.find((m) => m.role === "USER");
+    expect(listed?.attachments?.map((x) => [x.name, x.expired])).toEqual([["b.png", false], ["a.png", false]]);
+    await prisma.mediaAsset.update({ where: { id: b.id }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    const later = (await listMessages("u1", chat)).messages.find((m) => m.role === "USER");
+    expect(later?.attachments?.map((x) => [x.name, x.expired])).toEqual([["b.png", true], ["a.png", false]]);
+  });
+
+  it("leaves the attachments field off a message without files", async () => {
+    const chat = await newChat("u1");
+    const body = SendMessageResponseSchema.parse((await send("u1", chat, { content: "plain" })).body);
+    expect(body.message.attachments).toBeUndefined();
+  });
+
+  it.each([
+    ["another user's file", async () => [(await file("u2")).id], "attachments.0: That file isn't in your library."],
+    ["a file that doesn't exist", () => Promise.resolve(["cmuqzzzzz0000zzzzzzzzzzzz"]), "attachments.0: That file isn't in your library."],
+    ["an expired upload", async () => [(await file("u1", { expiresInHours: -1 })).id], "attachments.0: This file has expired. Upload it again."],
+    ["a bad file after a good one", async () => [(await file("u1")).id, (await file("u2")).id], "attachments.1: That file isn't in your library."],
+  ])("refuses %s, writing nothing", async (_label, ids, message) => {
+    const chat = await newChat("u1");
+    await prisma.user.upsert({ where: { id: "u2" }, update: {}, create: { id: "u2", balance: START } });
+    const attach = await ids();
+    const before = await counts();
+    const res = await send("u1", chat, { content: "hi", attachments: refs(...attach) });
+    expect(res.status).toBe(400);
+    expect(ErrorResponseSchema.parse(res.body).error).toBe(message);
+    await nothingHappened("u1", before);
+    expect(await prisma.attachment.count()).toBe(0);
+  });
+
+  it.each([
+    ["the same file twice", (id: string) => refs(id, id), /attached once/],
+    ["11 files", (id: string) => Array.from({ length: 11 }, (_, i) => ({ mediaAssetId: `${id}${i}` })), /at most 10 files/],
+  ])("refuses %s before anything is looked up", async (_label, build, message) => {
+    const chat = await newChat("u1");
+    const photo = await file("u1");
+    const before = await counts();
+    const res = await send("u1", chat, { content: "hi", attachments: build(photo.id) });
+    expect(res.status).toBe(400);
+    expect(ErrorResponseSchema.parse(res.body).error).toMatch(message);
+    await nothingHappened("u1", before);
+  });
+
+  it("treats a resent message with the same files as the same turn, and different files as a different message", async () => {
+    const chat = await newChat("u1");
+    const [a, b] = [await file("u1"), await file("u1")];
+    const clientMessageId = uuid();
+    const first = SendMessageResponseSchema.parse((await send("u1", chat, { content: "hi", clientMessageId, attachments: refs(a.id) })).body);
+    const again = await send("u1", chat, { content: "hi", clientMessageId, attachments: refs(a.id) });
+    expect(SendMessageResponseSchema.parse(again.body).runId).toBe(first.runId);
+    const changed = await send("u1", chat, { content: "hi", clientMessageId, attachments: refs(b.id) });
+    expect(changed.status).toBe(400);
+    expect(ErrorResponseSchema.parse(changed.body).error).toMatch(/already used for a different message/);
+    const reordered = await send("u1", chat, { content: "hi", clientMessageId, attachments: refs(a.id, b.id) });
+    expect(reordered.status).toBe(400);
+    expect(await prisma.attachment.count()).toBe(1);
+  });
+
+  it("keeps the files when the turn is retried (the same question, no new attachment rows)", async () => {
+    const chat = await newChat("u1");
+    const photo = await file("u1", { name: "keep.png" });
+    const first = SendMessageResponseSchema.parse((await send("u1", chat, { content: "crop it", attachments: refs(photo.id) })).body);
+    await finalizeRun(first.runId, { status: "FAILED", errorCode: "MODEL_UNAVAILABLE", errorMessage: "down" });
+    const retried = await as("u1").post(`/api/runs/${first.runId}/retry`);
+    expect(retried.status).toBe(201);
+    expect((retried.body as { message: { attachments?: { name: string }[] } }).message.attachments?.map((a) => a.name)).toEqual(["keep.png"]);
+    expect(await prisma.attachment.count()).toBe(1);
+  });
+
+  it("keeps a generated file attachable for ever (it doesn't expire)", async () => {
+    const chat = await newChat("u1");
+    const generated = await file("u1", { source: "GENERATED" });
+    expect((await send("u1", chat, { content: "use this", attachments: refs(generated.id) })).status).toBe(201);
   });
 });

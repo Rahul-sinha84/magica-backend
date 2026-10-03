@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
-import { AGENT_TASK_ID, type AgentTurnPayload } from "#src/agent/payload.js";
+import { AGENT_TASK_ID, type AgentTurnPayload, type MagicaToolPayload } from "#src/agent/payload.js";
 
 // Stands in for src/lib/trigger.ts. It behaves like Trigger.dev where it matters: the same idempotency key always
 // gives the same run, and it can be told to fail, hang, or accept a run and then report an error.
@@ -17,6 +17,15 @@ export const trigger = {
   statuses: new Map<string, string | null>(),
   statusLookups: [] as string[],
   tokenError: null as Error | null,
+  /** Waitpoint tokens completed through the API, in order; and an error to fail the next completions with. */
+  completedTokens: [] as { tokenId: string; output: Record<string, unknown> }[],
+  completeTokenError: null as Error | null,
+  /** Called on each completion, so a test can wake its fake waiting run (see tests/helpers/fakeTokens.ts). */
+  onTokenCompleted: null as ((tokenId: string, output: Record<string, unknown>) => void) | null,
+  /** While set, completing a token waits for it: holds an answer mid-way, to race another against it. */
+  completeTokenGate: null as Promise<void> | null,
+  toolDispatches: [] as { payload: MagicaToolPayload; key: string; triggerRunId: string }[],
+  toolDispatchError: null as Error | null,
 };
 
 export function resetTriggerMock() {
@@ -30,6 +39,12 @@ export function resetTriggerMock() {
   trigger.statuses.clear();
   trigger.statusLookups.length = 0;
   trigger.tokenError = null;
+  trigger.completedTokens.length = 0;
+  trigger.completeTokenError = null;
+  trigger.onTokenCompleted = null;
+  trigger.completeTokenGate = null;
+  trigger.toolDispatches.length = 0;
+  trigger.toolDispatchError = null;
 }
 
 export const triggerModule = {
@@ -47,6 +62,17 @@ export const triggerModule = {
     return triggerRunId;
   }),
 
+  /** standalone tool runs started through the public API, in order */
+  dispatchToolRun: vi.fn((payload: MagicaToolPayload, key: string): Promise<string> => {
+    if (trigger.toolDispatchError) return Promise.reject(trigger.toolDispatchError);
+    const existing = trigger.runsByKey.get(key);
+    if (existing) return Promise.resolve(existing);
+    const triggerRunId = `run_${randomUUID().slice(0, 12)}`;
+    trigger.runsByKey.set(key, triggerRunId);
+    trigger.toolDispatches.push({ payload, key, triggerRunId });
+    return Promise.resolve(triggerRunId);
+  }),
+
   cancelTriggerRun: vi.fn((triggerRunId: string): Promise<void> => {
     trigger.cancelled.push(triggerRunId); // the real one never throws, so neither does this
     return Promise.resolve();
@@ -55,6 +81,13 @@ export const triggerModule = {
   getTriggerRunStatus: vi.fn((triggerRunId: string): Promise<string | null> => {
     trigger.statusLookups.push(triggerRunId);
     return Promise.resolve(trigger.statuses.has(triggerRunId) ? (trigger.statuses.get(triggerRunId) ?? null) : "EXECUTING");
+  }),
+
+  completeWaitpointToken: vi.fn(async (tokenId: string, output: Record<string, unknown>): Promise<void> => {
+    if (trigger.completeTokenGate) await trigger.completeTokenGate;
+    if (trigger.completeTokenError) throw trigger.completeTokenError;
+    trigger.completedTokens.push({ tokenId, output });
+    trigger.onTokenCompleted?.(tokenId, output);
   }),
 
   createRealtimeToken: vi.fn((triggerRunId: string) =>

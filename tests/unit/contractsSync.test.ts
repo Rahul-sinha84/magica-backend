@@ -185,7 +185,7 @@ describe("synced output works the way the frontend uses it", () => {
   it("loads without file extensions and validates real data", async () => {
     syncContracts(options);
     const contracts = (await import(/* @vite-ignore */ pathToFileURL(join(options.destDir, "index.ts")).href)) as typeof Contracts;
-    expect(contracts.SendMessageBodySchema.parse({ content: "hi" })).toEqual({ content: "hi", attachments: [] });
+    expect(contracts.SendMessageBodySchema.parse({ content: "hi" })).toEqual({ content: "hi", attachments: [], mode: "default" });
     expect(contracts.foldChunks([{ type: "text-delta", delta: "ok" }])).toEqual([{ type: "text", content: "ok" }]);
   });
 

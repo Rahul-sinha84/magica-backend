@@ -21,8 +21,8 @@ const messages = (schema: typeof CropImageInputSchema | typeof GptImage2InputSch
 };
 
 describe("tool names", () => {
-  it("are the five agent tools", () => {
-    expect(ToolNameSchema.options).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"]);
+  it("are the six agent tools", () => {
+    expect(ToolNameSchema.options).toEqual(["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos", "propose_plan"]);
   });
 });
 
@@ -124,7 +124,7 @@ describe("crop_image: exactly one of three forms, always a complete rectangle", 
     ["a percent rectangle past the bottom edge", { x_percent: 0, y_percent: 60, width_percent: 10, height_percent: 50 }, /y \+ height/],
     ["a zero-size percent rectangle", { x_percent: 0, y_percent: 0, width_percent: 0, height_percent: 50 }, /greater than 0/],
     ["a crop past the edge", { crop: { x: 50, y: 50, width: 60, height: 10 } }, /x \+ width/],
-    ["a percent crop over 100", { crop: { x: 0, y: 0, width: 150, height: 10 } }, /between 0 and 100/],
+    ["a percent crop over 100 (pixel values without the unit: the message says how to fix it)", { crop: { x: 0, y: 0, width: 150, height: 10 } }, /between 0 and 100; for pixel values, set "unit": "pixel"/],
     ["a fractional pixel crop", { crop: { x: 0.5, y: 0, width: 10, height: 10, unit: "pixel" } }, /whole numbers/],
     ["a pixel crop missing its height", { width_px: 512 }, /width_px and height_px/],
     ["a pixel corner with only x", { x_px: 10, width_px: 512, height_px: 512 }, /both x_px and y_px/],

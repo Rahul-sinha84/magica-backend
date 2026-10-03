@@ -1,0 +1,36 @@
+---
+title: "Runs"
+description: "How a message becomes a run, what its statuses mean, and how to follow it."
+---
+
+Sending a message starts a **run**: the agent reads the conversation, thinks, uses tools if it needs them, and writes its answer. The request returns at once (`202`) with the run's id; the work happens in the background, and is saved as it goes, so nothing is lost if you stop polling or your connection drops.
+
+## Statuses
+
+| `status` | Meaning |
+| --- | --- |
+| `queued` | Waiting for a worker. Busy moments can mean a short wait. |
+| `running` | The agent is working: writing, or using a tool. |
+| `waiting` | Paused until you answer `pendingWaitpoint` (a plan or a spend to approve). See [Plan mode](/concepts/plan-mode). |
+| `completed` | Done. `reply.text` is the answer; `reply.assets` and `toolCalls[].assets` are the media it made. |
+| `failed` | It couldn't finish. `error.code` and `error.message` say why; what it did so far is kept. See [Errors](/errors#why-a-run-failed). |
+| `cancelled` | It was stopped. What it wrote so far is kept. |
+
+## Following a run
+
+- **Poll** [`GET /v1/runs/{runId}`](/api-reference/runs/get-a-run) every second or two until the status is `completed`, `failed` or `cancelled`. `reply.text` grows while it runs.
+- **Or pass a webhook** when you start it, and get `agent.started`, `tool.completed` and `agent.completed` (or `agent.failed`) as they happen. See [Webhooks](/webhooks).
+
+A run whose worker died is ended when you read it (as `failed`), so polling never hangs on a run that will never finish.
+
+## One run per chat
+
+A chat answers one message at a time: sending to a chat whose run is still going is refused with `409 RUN_ACTIVE`. Wait for it to finish, or stop it with [`POST /v1/runs/{runId}/cancel`](/api-reference/runs/stop-a-run), which keeps what it wrote so far.
+
+## What a run shows
+
+- `model` and `usage`: the free model the router picked, the tokens it used, and the **credits** its tools cost (the model itself is free).
+- `toolCalls`: each paid tool call (GPT Image 2, Crop Image, Merge Videos) with its input, credits, duration, status, error, and the media it made.
+- `reply.assets`: the media shown in the answer.
+
+Internal ids (the task runner's, the media service's) are never included.

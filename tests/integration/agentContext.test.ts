@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "#src/db/client.js";
-import { CONTEXT_CHAR_BUDGET, CONTEXT_MESSAGE_LIMIT, loadConversation } from "#src/agent/context.js";
+import { CONTEXT_CHAR_BUDGET, CONTEXT_MESSAGE_LIMIT, loadConversation, renderQuestion } from "#src/agent/context.js";
 import { fixtures, resetDb } from "../helpers/db.js";
 
 beforeEach(resetDb);
@@ -245,5 +245,68 @@ describe("earlier media and tool results in the history", () => {
       { role: "USER", content: "q2", at: 3 },
     ]);
     expect((await loadConversation(chat.id, ids[2]!))[1]).toEqual({ role: "assistant", content: "plain answer" });
+  });
+});
+
+describe("attached files", () => {
+  const HOUR = 3_600_000;
+  const asset = (userId: string, data: { type: "IMAGE" | "VIDEO" | "AUDIO"; url: string; expiresAt?: Date | null; source?: "UPLOAD" | "GENERATED" }) =>
+    prisma.mediaAsset.create({ data: { userId, type: data.type, url: data.url, source: data.source ?? "UPLOAD", expiresAt: data.source === "GENERATED" ? null : (data.expiresAt ?? new Date(Date.now() + HOUR)) } });
+
+  it("lists a question's files after its text, in order: a link for each live file, a note without one once expired", async () => {
+    const { user, chat, ids } = await setup([{ role: "USER", content: "Crop the first", at: 1 }]);
+    const live = await asset(user.id, { type: "IMAGE", url: "https://cdn.test/live.png" });
+    const gone = await asset(user.id, { type: "VIDEO", url: "https://cdn.test/gone.mp4", expiresAt: new Date(Date.now() - 1_000) });
+    const made = await asset(user.id, { type: "AUDIO", url: "https://cdn.test/made.mp3", source: "GENERATED" });
+    await prisma.attachment.createMany({
+      data: [
+        { messageId: ids[0]!, mediaAssetId: gone.id, position: 1 },
+        { messageId: ids[0]!, mediaAssetId: made.id, position: 2 },
+        { messageId: ids[0]!, mediaAssetId: live.id, position: 0 },
+      ],
+    });
+    expect(await loadConversation(chat.id, ids[0]!)).toEqual([
+      { role: "user", content: "Crop the first\n[Attached image: https://cdn.test/live.png]\n[Attached video (expired)]\n[Attached audio: https://cdn.test/made.mp3]" },
+    ]);
+  });
+
+  it("orders files by position even when the database doesn't read them in that order", async () => {
+    // the (message, position) index happens to return position order; a table scan (large tables, other plans) returns
+    // storage order, so the order must come from the query itself
+    const { user, chat, ids } = await setup([{ role: "USER", content: "In order please", at: 1 }]);
+    const files = await Promise.all(["third", "first", "second"].map((name) => asset(user.id, { type: "IMAGE", url: `https://cdn.test/${name}.png` })));
+    await prisma.attachment.createMany({ data: [2, 0, 1].map((position, i) => ({ messageId: ids[0]!, mediaAssetId: files[i]!.id, position })) });
+    const conversation = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL enable_indexscan = off");
+      await tx.$executeRawUnsafe("SET LOCAL enable_bitmapscan = off");
+      return loadConversation(chat.id, ids[0]!, tx);
+    });
+    expect(conversation[0]?.content).toBe("In order please\n[Attached image: https://cdn.test/first.png]\n[Attached image: https://cdn.test/second.png]\n[Attached image: https://cdn.test/third.png]");
+  });
+
+  it("judges expiry at the moment of the turn", async () => {
+    const { user, chat, ids } = await setup([{ role: "USER", content: "Use it", at: 1 }]);
+    const file = await asset(user.id, { type: "IMAGE", url: "https://cdn.test/soon.png", expiresAt: new Date(Date.now() + HOUR) });
+    await prisma.attachment.create({ data: { messageId: ids[0]!, mediaAssetId: file.id, position: 0 } });
+    expect((await loadConversation(chat.id, ids[0]!))[0]?.content).toContain("[Attached image: https://cdn.test/soon.png]");
+    expect((await loadConversation(chat.id, ids[0]!, prisma, new Date(Date.now() + 2 * HOUR)))[0]?.content).toBe("Use it\n[Attached image (expired)]");
+  });
+
+  it("carries files of earlier questions too, so a follow-up can refer back to them", async () => {
+    const { user, chat, ids } = await setup([
+      { role: "USER", content: "Here is my photo", at: 1 },
+      { role: "ASSISTANT", content: "Got it.", at: 2 },
+      { role: "USER", content: "Now crop it", at: 3 },
+    ]);
+    const photo = await asset(user.id, { type: "IMAGE", url: "https://cdn.test/photo.png" });
+    await prisma.attachment.create({ data: { messageId: ids[0]!, mediaAssetId: photo.id, position: 0 } });
+    expect((await loadConversation(chat.id, ids[2]!))[0]?.content).toBe("Here is my photo\n[Attached image: https://cdn.test/photo.png]");
+  });
+});
+
+describe("renderQuestion", () => {
+  it("is just the text with no files, and just the files with no text", () => {
+    expect(renderQuestion("hello", [])).toBe("hello");
+    expect(renderQuestion("", [{ type: "IMAGE", url: "https://x/a.png", expiresAt: null }])).toBe("[Attached image: https://x/a.png]");
   });
 });

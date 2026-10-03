@@ -1,4 +1,4 @@
-import { metadata, streams, task } from "@trigger.dev/sdk";
+import { metadata, streams, task, wait } from "@trigger.dev/sdk";
 import type { AgentStreamChunk, AgentStreamMetadata } from "#src/contracts/index.js";
 import { AGENT_STREAM_ID } from "#src/contracts/index.js";
 import { ChunkQueue } from "#src/agent/chunkQueue.js";
@@ -14,6 +14,7 @@ import { skills } from "#src/skills/skills.js";
 import { agentTools } from "#src/tools/index.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
 import { magicaToolTask } from "#src/trigger/magicaToolTask.js";
+import type { WaitTokens } from "#src/waitpoints/wait.js";
 
 // This file runs on Trigger.dev's workers, not in the API, so it must only import what the worker can load (no server
 // environment, no Express, no Clerk). A test checks that.
@@ -54,6 +55,21 @@ async function runMagicaCalls(runId: string, calls: MagicaToolPayload[]): Promis
   );
 }
 
+/**
+ * Trigger.dev's waitpoint tokens. While a run waits on one it is suspended: it holds no worker or concurrency slot, and
+ * the wait doesn't count against maxDuration.
+ */
+const waitTokens: WaitTokens = {
+  create: async ({ idempotencyKey, timeout, tags }) => {
+    const token = await wait.createToken({ idempotencyKey, timeout, tags });
+    return { id: token.id };
+  },
+  wait: async (tokenId) => {
+    const result = await wait.forToken<unknown>(tokenId);
+    return result.ok ? { ok: true, output: result.output } : { ok: false };
+  },
+};
+
 export const agentTurn = task({
   id: AGENT_TASK_ID,
   // a turn must never run past this (the API's stale-run rule assumes it), and it is never retried: a retry would
@@ -80,7 +96,10 @@ export const agentTurn = task({
           setStatus,
           triggerRunId: ctx.run.id,
           signal,
-          tools: { registry: agentTools, skills: skills().metadata(), runMagicaCalls: (calls) => runMagicaCalls(payload.agentRunId, calls) },
+          tools: { registry: agentTools, skills: skills().metadata(), runMagicaCalls: (calls) => runMagicaCalls(payload.agentRunId, calls),
+            waitpoints: waitTokens,
+            creditApprovalThreshold: env.CREDIT_APPROVAL_THRESHOLD,
+          },
         });
         return { result };
       } finally {

@@ -15,12 +15,23 @@ import {
   ErrorResponseSchema,
   IsoDateTimeSchema,
   ModelsResponseSchema,
+  ChatSearchQuerySchema,
+  CreateUploadsBodySchema,
+  UploadFileSchema,
+  MAX_ATTACHMENTS,
+  MAX_UPLOAD_BYTES,
+  MONTHLY_UPLOAD_BYTES,
+  UPLOAD_LIFETIME_MS,
   MessageListResponseSchema,
   MessageSchema,
   RunStatusSchema,
   SendMessageBodySchema,
   SendMessageResponseSchema,
   UpdateChatBodySchema,
+  PlanPayloadSchema,
+  RespondWaitpointBodySchema,
+  WAITPOINT_ACTIONS,
+  WAITPOINT_LIFETIME_MS,
 } from "#src/contracts/index.js";
 
 const now = "2026-09-30T12:00:00.000Z";
@@ -127,8 +138,13 @@ describe("CursorQuerySchema", () => {
 describe("SendMessageBodySchema", () => {
   const id = crypto.randomUUID();
 
-  it("parses a minimal body and defaults attachments", () => {
-    expect(SendMessageBodySchema.parse({ content: "Hello" })).toEqual({ content: "Hello", attachments: [] });
+  it("parses a minimal body and defaults attachments and the mode", () => {
+    expect(SendMessageBodySchema.parse({ content: "Hello" })).toEqual({ content: "Hello", attachments: [], mode: "default" });
+  });
+
+  it("takes plan mode, and nothing else as a mode", () => {
+    expect(SendMessageBodySchema.parse({ content: "Hello", mode: "plan" }).mode).toBe("plan");
+    for (const mode of ["PLAN", "auto", "", null]) expect(SendMessageBodySchema.safeParse({ content: "Hello", mode }).success).toBe(false);
   });
 
   it("keeps the text exactly as typed, including indentation and trailing newlines", () => {
@@ -153,8 +169,25 @@ describe("SendMessageBodySchema", () => {
 
   it("gives every parse its own attachments array (a shared default would leak between requests)", () => {
     const first = SendMessageBodySchema.parse({ content: "a" });
-    first.attachments.push("https://x.test/leak.png");
+    first.attachments.push({ mediaAssetId: "leak" });
     expect(SendMessageBodySchema.parse({ content: "b" }).attachments).toEqual([]);
+  });
+
+  it("takes attachments as library file ids, in order, each at most once, at most 10", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => ({ mediaAssetId: `asset${i}` }));
+    expect(SendMessageBodySchema.parse({ content: "hi", attachments: ids(2) }).attachments).toEqual([{ mediaAssetId: "asset0" }, { mediaAssetId: "asset1" }]);
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: ids(10) }).success).toBe(true);
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: ids(11) }).success).toBe(false);
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: [{ mediaAssetId: "a" }, { mediaAssetId: "a" }] }).success).toBe(false);
+  });
+
+  it.each([
+    [["https://x.test/a.png"]],
+    [[{ mediaAssetId: "../../etc" }]],
+    [[{ mediaAssetId: "" }]],
+    [[{ mediaAssetId: "a", url: "https://x.test/a.png" }]],
+  ])("refuses attachments that aren't plain library ids: %j", (attachments) => {
+    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments }).success).toBe(false);
   });
 
   it("rejects NUL characters, which Postgres cannot store", () => {
@@ -179,11 +212,8 @@ describe("SendMessageBodySchema", () => {
     expect(SendMessageBodySchema.safeParse({ content: "hi", clientMessageId: null }).success).toBe(false);
   });
 
-  it("limits attachments to 10 http(s) URLs", () => {
-    const url = "https://cdn.example.com/a.png";
-    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: Array(10).fill(url) }).success).toBe(true);
-    expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: Array(11).fill(url) }).success).toBe(false);
-    for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,x", "nope"]) {
+  it("never takes raw links as attachments: files come from the user's library", () => {
+    for (const bad of ["https://cdn.example.com/a.png", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,x"]) {
       expect(SendMessageBodySchema.safeParse({ content: "hi", attachments: [bad] }).success).toBe(false);
     }
   });
@@ -414,12 +444,19 @@ describe("ModelsResponseSchema", () => {
   const body = {
     models: [{ id: "openrouter/free", name: "OpenRouter Free", provider: "openrouter", free: true, isDefault: true }],
     defaultModelId: "openrouter/free",
-    status: { health: "available", lastRoutedModel: "meta/free-7b", checkedAt: "2026-10-01T10:00:00.000Z" },
+    status: { health: "available", lastRoutedModel: "meta/free-7b", reason: null, checkedAt: "2026-10-01T10:00:00.000Z" },
   };
 
   it("parses the model list with its health", () => {
     expect(ModelsResponseSchema.safeParse(body).success).toBe(true);
     expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, lastRoutedModel: null } }).success).toBe(true);
+  });
+
+  it("carries a reason (null when there is nothing specific to say), always present", () => {
+    const limited = { ...body.status, health: "unavailable", reason: "The free model's daily limit is reached. It resets at 00:00 UTC." };
+    expect(ModelsResponseSchema.safeParse({ ...body, status: limited }).success).toBe(true);
+    const { reason: _reason, ...withoutReason } = body.status;
+    expect(ModelsResponseSchema.safeParse({ ...body, status: withoutReason }).success).toBe(false);
   });
 
   it.each(["available", "degraded", "unavailable", "unknown"])("accepts health %j", (health) => {
@@ -430,5 +467,90 @@ describe("ModelsResponseSchema", () => {
     expect(ModelsResponseSchema.safeParse({ ...body, status: { ...body.status, health: "fine" } }).success).toBe(false);
     expect(ModelsResponseSchema.safeParse({ ...body, models: [{ ...body.models[0], free: false }] }).success).toBe(false);
     expect(ModelsResponseSchema.safeParse({ ...body, models: [{ ...body.models[0], provider: "openai" }] }).success).toBe(false);
+  });
+});
+
+describe("ChatSearchQuerySchema", () => {
+  it("trims the query and pages 20 at a time unless asked", () => {
+    expect(ChatSearchQuerySchema.parse({ q: "  red fox  " })).toEqual({ q: "red fox", limit: 20 });
+    expect(ChatSearchQuerySchema.parse({ q: "red", limit: "50", cursor: "abc" })).toEqual({ q: "red", limit: 50, cursor: "abc" });
+  });
+
+  it.each([{}, { q: "ab" }, { q: " ab " }, { q: "x".repeat(101) }, { q: "abc\u0000" }, { q: "abc", limit: 51 }, { q: "abc", limit: 0 }, { q: "abc", cursor: "" }])("rejects %j", (query) => {
+    expect(ChatSearchQuerySchema.safeParse(query).success).toBe(false);
+  });
+});
+
+describe("uploads contract", () => {
+  it("states the limits the frontend checks against", () => {
+    expect({ MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, MONTHLY_UPLOAD_BYTES, UPLOAD_LIFETIME_MS }).toEqual({ MAX_ATTACHMENTS: 10, MAX_UPLOAD_BYTES: 500_000_000, MONTHLY_UPLOAD_BYTES: 5_000_000_000, UPLOAD_LIFETIME_MS: 23 * 3_600_000 });
+  });
+
+  it("normalises the type: case and parameters don't matter", () => {
+    expect(UploadFileSchema.parse({ name: "a.wav", size: 1, mimeType: " Audio/WAV; codecs=1 " }).mimeType).toBe("audio/wav");
+  });
+
+  it.each([
+    [{ name: "a.png", size: 1, mimeType: 42 }],
+    [{ name: "a.png", size: -1, mimeType: "image/png" }],
+    [{ name: "a.svg", size: 1, mimeType: "image/svg+xml" }],
+    [{ name: "a.png", size: 1, mimeType: "image/png", extra: true }],
+  ])("rejects %j", (file) => {
+    expect(UploadFileSchema.safeParse(file).success).toBe(false);
+  });
+
+  it("caps a request at the per-message limit", () => {
+    const file = { name: "a.png", size: 1, mimeType: "image/png" };
+    expect(CreateUploadsBodySchema.safeParse({ files: Array(MAX_ATTACHMENTS).fill(file) }).success).toBe(true);
+    expect(CreateUploadsBodySchema.safeParse({ files: Array(MAX_ATTACHMENTS + 1).fill(file) }).success).toBe(false);
+  });
+});
+
+describe("waitpoints contract", () => {
+  const plan = { title: "Fox", overview: "Make a fox", steps: [{ title: "Generate", tool: "gpt_image_2", estimatedCredits: 1_000_000 }], totalCredits: 1_000_000 };
+  const credit = { calls: [{ toolCallId: "s1-a", toolName: "gpt_image_2", credits: 1_000_000 }], totalCredits: 1_000_000 };
+  const card = { type: "waitpoint", waitpointId: "w1", status: "pending", expiresAt: "2026-10-02T12:30:00.000Z" };
+
+  it("says what each kind can be answered with, and how long one lasts", () => {
+    expect(WAITPOINT_ACTIONS).toEqual({ plan: ["approve", "request_changes"], credit: ["approve", "reject"] });
+    expect(WAITPOINT_LIFETIME_MS).toBe(30 * 60_000);
+  });
+
+  it("ties the payload to the kind, on the card and on the stream", () => {
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "plan", payload: plan }).success).toBe(true);
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "credit", payload: credit }).success).toBe(true);
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "credit", payload: plan }).success).toBe(false);
+    expect(ContentBlockSchema.safeParse({ ...card, waitpointType: "poll", payload: plan }).success).toBe(false);
+    const { type: _type, status: _status, ...start } = card;
+    expect(AgentStreamChunkSchema.safeParse({ ...start, type: "waitpoint-start", waitpointType: "plan", payload: credit }).success).toBe(false);
+  });
+
+  it("never ends a waitpoint as pending", () => {
+    expect(AgentStreamChunkSchema.safeParse({ type: "waitpoint-end", waitpointId: "w1", status: "approved", waitedMs: 1 }).success).toBe(true);
+    expect(AgentStreamChunkSchema.safeParse({ type: "waitpoint-end", waitpointId: "w1", status: "pending", waitedMs: 1 }).success).toBe(false);
+  });
+
+  it.each([
+    [{ ...plan, steps: [] }],
+    [{ ...plan, steps: [{ title: "Generate", estimatedCredits: -1 }] }],
+    [{ ...plan, steps: [{ title: "Generate", estimatedCredits: 1.5 }] }],
+    [{ ...plan, title: " " }],
+    [{ ...plan, steps: Array(21).fill({ title: "Step", estimatedCredits: 0 }) }],
+  ])("refuses a plan that makes no sense: %j", (payload) => {
+    expect(PlanPayloadSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it("reads an answer: feedback trimmed, at most 2000 characters, no unknown fields", () => {
+    expect(RespondWaitpointBodySchema.parse({ action: "request_changes", feedback: "  Red  " })).toEqual({ action: "request_changes", feedback: "Red" });
+    for (const body of [{ action: "approve", feedback: "x".repeat(2001) }, { action: "approve", feedback: " " }, { action: "approve", note: "x" }, { action: "approve", feedback: "a\u0000" }, {}]) {
+      expect(RespondWaitpointBodySchema.safeParse(body).success).toBe(false);
+    }
+  });
+
+  it("adds the waiting status, and a pending waitpoint to the active run that older responses may leave out", () => {
+    expect(AgentStreamMetadataSchema.parse({ status: "waiting", waitpointId: "w1" })).toEqual({ status: "waiting", waitpointId: "w1" });
+    const base = { run: null, realtimeToken: null, realtimeTokenExpiresAt: null, partialText: null, partialBlocks: [] };
+    expect(ActiveRunResponseSchema.safeParse(base).success).toBe(true);
+    expect(ActiveRunResponseSchema.safeParse({ ...base, pendingWaitpoint: null }).success).toBe(true);
   });
 });

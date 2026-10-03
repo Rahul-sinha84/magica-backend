@@ -75,11 +75,11 @@ export const CropImageInputSchema = z
     image_url: MediaUrlSchema.describe("The image to crop."),
     crop: z
       .object({
-        x: z.number().min(0),
-        y: z.number().min(0),
+        x: z.number().min(0).describe("Left edge of the rectangle."),
+        y: z.number().min(0).describe("Top edge of the rectangle."),
         width: z.number().positive(),
         height: z.number().positive(),
-        unit: z.enum(["percent", "pixel"]).default("percent"),
+        unit: z.enum(["percent", "pixel"]).default("percent").describe('percent (the default): every value is 0-100, a share of the image\'s size. pixel: whole pixels; set it whenever the values are pixels.'),
       })
       .optional()
       .describe("The rectangle to keep: top-left corner (x, y) and size, in percent of the image (default) or pixels."),
@@ -108,7 +108,7 @@ export const CropImageInputSchema = z
     if (input.crop) {
       const { x, y, width, height, unit } = input.crop;
       if (unit === "percent") {
-        if ([x, y, width, height].some((v) => v > 100)) ctx.addIssue({ code: "custom", path: ["crop"], message: "percent values must be between 0 and 100" });
+        if ([x, y, width, height].some((v) => v > 100)) ctx.addIssue({ code: "custom", path: ["crop"], message: 'percent values must be between 0 and 100; for pixel values, set "unit": "pixel"' });
         else rectangle(x, y, width, height, ["crop"]);
       } else if (![x, y, width, height].every(Number.isInteger)) {
         ctx.addIssue({ code: "custom", path: ["crop"], message: "pixel values must be whole numbers" });
@@ -143,7 +143,36 @@ export const MergeVideosOutputSchema = z.object({
   }),
 });
 
-export const TOOL_NAMES = ["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos"] as const;
+// ---- propose_plan (plan mode) ----
+
+/** The tools a plan's step may use: the ones that cost credits. */
+export const PLAN_STEP_TOOLS = ["gpt_image_2", "crop_image", "merge_videos"] as const;
+
+export const ProposePlanInputSchema = z.object({
+  title: z.string().trim().min(1).max(200).describe("A short name for the plan."),
+  overview: z.string().trim().min(1).max(2000).describe("What the plan will do, in a sentence or two."),
+  steps: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1).max(200).describe("What this step does."),
+        description: z.string().trim().max(1000).optional().describe("Details, such as the prompt or the crop."),
+        tool: z.enum(PLAN_STEP_TOOLS).optional().describe("The tool this step calls (one call per step); leave it out for a step without a tool."),
+      }),
+    )
+    .min(1)
+    .max(20)
+    .describe("The steps, in order."),
+  notes: z.string().trim().max(2000).optional().describe("Anything the user should know: assumptions, choices you made."),
+});
+
+// The model reads this to know what to do next; the card shows the status (and the feedback).
+export const ProposePlanOutputSchema = z.object({
+  status: z.enum(["approved", "changes_requested"]),
+  feedback: z.string().optional(),
+  instruction: z.string(),
+});
+
+export const TOOL_NAMES = ["load_skill", "read_skill_asset", "gpt_image_2", "crop_image", "merge_videos", "propose_plan"] as const;
 export const ToolNameSchema = z.enum(TOOL_NAMES);
 
 /** How each tool is named in the UI (the tool card, the step list). */
@@ -153,6 +182,7 @@ export const TOOL_LABELS: Readonly<Record<(typeof TOOL_NAMES)[number], string>> 
   gpt_image_2: "GPT Image 2",
   crop_image: "Crop Image",
   merge_videos: "Merge Videos",
+  propose_plan: "Plan",
 };
 
 /**
@@ -180,3 +210,5 @@ export type CropImageInput = z.infer<typeof CropImageInputSchema>;
 export type CropImageOutput = z.infer<typeof CropImageOutputSchema>;
 export type MergeVideosInput = z.infer<typeof MergeVideosInputSchema>;
 export type MergeVideosOutput = z.infer<typeof MergeVideosOutputSchema>;
+export type ProposePlanInput = z.infer<typeof ProposePlanInputSchema>;
+export type ProposePlanOutput = z.infer<typeof ProposePlanOutputSchema>;

@@ -296,6 +296,25 @@ describe("CORS", () => {
     expect(res.headers["access-control-max-age"]).toBe("600");
   });
 
+  it("lets any origin call the public API (keys in headers, never cookies), and nothing else of it", async () => {
+    const preflight = await api(app)
+      .options("/v1/messages")
+      .set("Origin", "https://docs.example.com")
+      .set("Access-Control-Request-Method", "POST")
+      .set("Access-Control-Request-Headers", "x-api-key,content-type,idempotency-key");
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("*");
+    expect(preflight.headers["access-control-allow-headers"]).toMatch(/x-api-key/i);
+    expect(preflight.headers["access-control-allow-headers"]).toMatch(/idempotency-key/i);
+    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
+    const res = await api(app).get("/v1/credits").set("Origin", "https://docs.example.com");
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+    expect(res.headers["access-control-expose-headers"]).toMatch(/x-trace-id.*x-api-version.*idempotent-replayed.*retry-after.*ratelimit/i);
+    // the app's own API stays the app's
+    const app_ = await api(app).options("/api/credits").set("Origin", "https://docs.example.com").set("Access-Control-Request-Method", "GET");
+    expect(app_.headers["access-control-allow-origin"]).toBe(origin);
+  });
+
   it("never echoes a foreign origin back", async () => {
     for (const foreign of ["http://evil.example", "http://localhost:3001.evil.example", "http://localhost:3002", "null"]) {
       const res = await api(app).options("/api/credits").set("Origin", foreign).set("Access-Control-Request-Method", "GET");

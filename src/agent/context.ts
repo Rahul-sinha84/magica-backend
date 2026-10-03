@@ -14,10 +14,20 @@ export interface HistoryMessage {
 
 const MEDIA_LABEL = { image: "image", video: "video", audio: "audio" } as const;
 
+const WAITPOINT_OUTCOME = { approved: "approved", changes_requested: "changes requested", rejected: "declined", expired: "expired without an answer", cancelled: "stopped", pending: "not answered" } as const;
+
+/** One line about a question the user was asked in that reply (a plan to approve, a spend to approve), and their answer. */
+function renderWaitpoint(block: Extract<ContentBlock, { type: "waitpoint" }>): string {
+  const outcome = WAITPOINT_OUTCOME[block.status];
+  const feedback = block.feedback ? `: ${block.feedback}` : "";
+  return block.waitpointType === "plan" ? `[Plan "${block.payload.title}" ${outcome}${feedback}]` : `[Spend of ${block.payload.totalCredits} credits ${outcome}${feedback}]`;
+}
+
 /**
  * What the model is told about an earlier reply. Its text (only if it finished: a failed or stopped reply's partial
  * text is unreliable), every image, video or audio it produced (so "crop the image" knows which one, even if the turn
- * failed later), and which tool calls failed and why. Thinking, usage and successful tool details are left out.
+ * failed later), which tool calls failed and why, and what the user answered when asked to approve something.
+ * Thinking, usage and successful tool details are left out.
  */
 export function renderReply(blocks: ContentBlock[], fallbackText: string | null, finished: boolean): string {
   const lines: string[] = [];
@@ -26,6 +36,21 @@ export function renderReply(blocks: ContentBlock[], fallbackText: string | null,
   for (const block of blocks) {
     if (block.type === "image" || block.type === "video" || block.type === "audio") lines.push(`[Generated ${MEDIA_LABEL[block.type]}: ${block.url}]`);
     else if (block.type === "tool_result" && block.isError) lines.push(`[${block.toolName} failed: ${block.errorMessage ?? "no reason given"}]`);
+    else if (block.type === "waitpoint") lines.push(renderWaitpoint(block));
+  }
+  return lines.join("\n");
+}
+
+/**
+ * What the model is told about a user's message: its text, then one line per attached file, in order. A file that has
+ * expired gets a line without a link, so the model knows it was there but can't hand a dead link to a tool (the tools
+ * only accept links that appear in the conversation).
+ */
+export function renderQuestion(text: string | null, files: readonly { type: "IMAGE" | "VIDEO" | "AUDIO"; url: string; expiresAt: Date | null }[], now = new Date()): string {
+  const lines = text?.trim() ? [text] : [];
+  for (const file of files) {
+    const label = MEDIA_LABEL[file.type === "IMAGE" ? "image" : file.type === "VIDEO" ? "video" : "audio"];
+    lines.push(file.expiresAt && file.expiresAt.getTime() <= now.getTime() ? `[Attached ${label} (expired)]` : `[Attached ${label}: ${file.url}]`);
   }
   return lines.join("\n");
 }
@@ -40,6 +65,7 @@ export async function loadConversation(
   chatId: string,
   triggerMessageId: string,
   db: Pick<typeof prisma, "message"> = prisma,
+  now = new Date(),
 ): Promise<HistoryMessage[]> {
   const trigger = await db.message.findUnique({ where: { id: triggerMessageId }, select: { createdAt: true, id: true, chatId: true } });
   if (!trigger || trigger.chatId !== chatId) return [];
@@ -55,7 +81,13 @@ export async function loadConversation(
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: CONTEXT_MESSAGE_LIMIT,
-    select: { role: true, status: true, content: true, contentBlocks: true },
+    select: {
+      role: true,
+      status: true,
+      content: true,
+      contentBlocks: true,
+      attachments: { orderBy: { position: "asc" }, select: { mediaAsset: { select: { type: true, url: true, expiresAt: true } } } },
+    },
   });
 
   // newest first until the budget runs out; the question itself (the first one) is always kept
@@ -64,7 +96,7 @@ export async function loadConversation(
   for (const row of rows) {
     const content =
       row.role === "USER"
-        ? (row.content ?? "")
+        ? renderQuestion(row.content, row.attachments.map((file) => file.mediaAsset), now)
         : renderReply(ContentBlocksSchema.parse(Array.isArray(row.contentBlocks) ? row.contentBlocks : []), row.content, row.status === "COMPLETED");
     if (!content.trim()) continue; // nothing the model could use (an empty or text-only failed reply)
     if (kept.length > 0 && used + content.length > CONTEXT_CHAR_BUDGET) break;

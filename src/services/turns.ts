@@ -11,7 +11,9 @@ import { hold } from "#src/services/credits.js";
 import { reconcileChat, reconcileUserRuns } from "#src/services/reconcile.js";
 import { requireChat } from "#src/services/chats.js";
 import { ACTIVE_STATUSES, RETRYABLE_STATUSES, finalizeRun } from "#src/services/runs.js";
-import { serializeMessage } from "#src/services/serialize.js";
+import { attachableAssets } from "#src/services/media.js";
+import { WITH_ATTACHMENTS, serializeMessage } from "#src/services/serialize.js";
+import { subscribe, type WebhookTarget } from "#src/services/webhooks.js";
 
 const PROVISIONAL_TITLE_MAX = 50;
 const DISPATCH_TIMEOUT_MS = 8_000;
@@ -34,6 +36,7 @@ const violates = (error: unknown, constraint: string) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && constraintOf(error) === constraint;
 
 const runActive = () => new AppError("RUN_ACTIVE", "An agent is already running in this chat.");
+const RUN_MODE = { default: "DEFAULT", plan: "PLAN" } as const;
 
 /** A reply to a send that was already accepted: the same turn, never a second one. Null when there is no such turn. */
 async function replay(chatId: string, body: SendMessageBody, replayWaitMs: number): Promise<SentTurn | null> {
@@ -41,14 +44,16 @@ async function replay(chatId: string, body: SendMessageBody, replayWaitMs: numbe
   const find = () =>
     prisma.message.findFirst({
       where: { chatId, clientMessageId: body.clientMessageId },
-      include: { triggeredRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, triggerRunId: true } } },
+      include: { triggeredRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, triggerRunId: true, mode: true } }, ...WITH_ATTACHMENTS },
     });
 
   let existing = await find();
   if (!existing) return null;
   // the same id must mean the same message: anything else is a client bug, and quietly answering with the
   // earlier turn would hide it
-  if (existing.content !== body.content) {
+  const sameFiles = existing.attachments.map((file) => file.mediaAssetId).join() === body.attachments.map((file) => file.mediaAssetId).join();
+  const sameMode = !existing.triggeredRuns[0] || existing.triggeredRuns[0].mode === RUN_MODE[body.mode];
+  if (existing.content !== body.content || !sameFiles || !sameMode) {
     throw new AppError("VALIDATION_FAILED", "clientMessageId: That id was already used for a different message.", {
       fields: { clientMessageId: ["Already used for a different message."] },
     });
@@ -69,20 +74,24 @@ async function replay(chatId: string, body: SendMessageBody, replayWaitMs: numbe
  * Everything a send needs, written together or not at all: the message, the placeholder for the reply, the run (whose
  * unique index allows one active run per chat) and the credit hold. A refused hold rolls all of it back.
  */
-function createTurn(userId: string, chatId: string, body: SendMessageBody, traceId: string) {
+function createTurn(userId: string, chatId: string, body: SendMessageBody, traceId: string, webhook?: WebhookTarget) {
   return prisma.$transaction(async (tx) => {
     const now = new Date();
     const replyAt = new Date(now.getTime() + 1); // strictly after the question, so history always reads question then answer
-    const userMessage = await tx.message.create({
+    const files = await attachableAssets(tx, userId, body.attachments, now); // refuses (and rolls back) before anything is written
+    const created = await tx.message.create({
       data: { chatId, userId, role: "USER", status: "COMPLETED", content: body.content, clientMessageId: body.clientMessageId ?? null, createdAt: now },
     });
+    if (files.length > 0) await tx.attachment.createMany({ data: files.map((file, position) => ({ messageId: created.id, mediaAssetId: file.id, position })) });
+    const userMessage = { ...created, attachments: files.map((mediaAsset, position) => ({ position, mediaAsset })) };
     const assistantMessage = await tx.message.create({
       data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
     });
     const run = await tx.agentRun.create({
-      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId },
+      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, mode: RUN_MODE[body.mode] },
     });
     await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold", idempotencyKey: holdKey(run.id), agentRunId: run.id });
+    if (webhook) await subscribe(tx, webhook, { agentRunId: run.id }); // before the turn starts, so it hears agent.started
 
     // a chat still called "New chat" takes its name from its first message, so the sidebar is never a column of "New chat"
     const provisional = titleFrom(body.content, PROVISIONAL_TITLE_MAX);
@@ -139,13 +148,10 @@ async function dispatch(created: Created, userId: string, chatId: string, traceI
 }
 
 export async function sendMessage(
-  { userId, chatId, body: received, traceId }: { userId: string; chatId: string; body: SendMessageBody; traceId: string },
+  { userId, chatId, body: received, traceId, webhook }: { userId: string; chatId: string; body: SendMessageBody; traceId: string; webhook?: WebhookTarget },
   { dispatchTimeoutMs = DISPATCH_TIMEOUT_MS, replayWaitMs = REPLAY_WAIT_MS }: SendOptions = {},
 ): Promise<SentTurn> {
   const body = { ...received, content: wellFormed(received.content) }; // exactly what will be stored, so replays compare equal
-  if (body.attachments.length > 0) {
-    throw new AppError("VALIDATION_FAILED", "attachments: Attachments aren't supported yet.", { fields: { attachments: ["Not supported yet."] } });
-  }
   const chat = await requireChat(userId, chatId);
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -154,7 +160,7 @@ export async function sendMessage(
 
     let created: Created;
     try {
-      created = await createTurn(userId, chatId, body, traceId);
+      created = await createTurn(userId, chatId, body, traceId, webhook);
     } catch (error) {
       if (violates(error, "Message_chatId_clientMessageId_key")) continue; // a twin of this request won the race: replay it
       if (error instanceof AppError && error.code === "INSUFFICIENT_CREDITS" && (await reconcileUserRuns(userId, { force: true }))) {
@@ -188,7 +194,7 @@ const replyGone = () => new AppError("NOT_FOUND", "That reply isn't there any mo
 /** A retry of this run that was already started (a double click, a repeated request): the same turn, never a second. */
 async function existingRetry(runId: string, replayWaitMs: number): Promise<SentTurn | null> {
   const find = () =>
-    prisma.agentRun.findUnique({ where: { retryOfRunId: runId }, select: { id: true, triggerRunId: true, triggerMessage: true } });
+    prisma.agentRun.findUnique({ where: { retryOfRunId: runId }, select: { id: true, triggerRunId: true, triggerMessage: { include: WITH_ATTACHMENTS } } });
   let retry = await find();
   if (!retry) return null;
   // the first request may still be handing it to Trigger.dev; give it a moment rather than fail a double click
@@ -208,7 +214,7 @@ class RetryAlreadyStarted extends Error {}
  * The new turn for a retry, written together or not at all. The chat row is locked first, so "is this still the chat's
  * latest turn?" cannot change underneath us: a send and a retry, or two retries, take turns instead of racing.
  */
-function createRetryTurn(userId: string, original: { id: string; chatId: string; triggerMessageId: string }, traceId: string) {
+function createRetryTurn(userId: string, original: { id: string; chatId: string; triggerMessageId: string; mode: "DEFAULT" | "PLAN" }, traceId: string) {
   const { chatId } = original;
   return prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Chat" WHERE id = ${chatId} FOR UPDATE`;
@@ -227,12 +233,12 @@ function createRetryTurn(userId: string, original: { id: string; chatId: string;
     if (!status || !RETRYABLE_STATUSES.includes(status)) throw notRetryable("Only a failed or stopped reply can be retried.");
 
     const replyAt = new Date(); // after the failed reply, so the new answer reads below it
-    const userMessage = await tx.message.findUniqueOrThrow({ where: { id: original.triggerMessageId } });
+    const userMessage = await tx.message.findUniqueOrThrow({ where: { id: original.triggerMessageId }, include: WITH_ATTACHMENTS });
     const assistantMessage = await tx.message.create({
       data: { chatId, userId, role: "ASSISTANT", status: "STREAMING", contentBlocks: [], createdAt: replyAt },
     });
     const run = await tx.agentRun.create({
-      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, retryOfRunId: original.id },
+      data: { chatId, userId, triggerMessageId: userMessage.id, assistantMessageId: assistantMessage.id, traceId, retryOfRunId: original.id, mode: original.mode },
     });
     await hold(tx, { userId, amount: env.CREDIT_ADMISSION_HOLD, reason: "agent turn admission hold (retry)", idempotencyKey: holdKey(run.id), agentRunId: run.id });
     // a retry follows the same guidance as the attempt it retries: it starts with that run's loaded skills, text and all
@@ -253,7 +259,7 @@ export async function retryRun(
   { userId, runId, traceId }: { userId: string; runId: string; traceId: string },
   { dispatchTimeoutMs = DISPATCH_TIMEOUT_MS, replayWaitMs = REPLAY_WAIT_MS }: SendOptions = {},
 ): Promise<SentTurn> {
-  const original = await prisma.agentRun.findFirst({ where: { id: runId, userId }, select: { id: true, chatId: true, triggerMessageId: true } });
+  const original = await prisma.agentRun.findFirst({ where: { id: runId, userId }, select: { id: true, chatId: true, triggerMessageId: true, mode: true } });
   if (!original) throw replyGone(); // another user's run is "not found" too, so nothing leaks
   const chat = await requireChat(userId, original.chatId);
 

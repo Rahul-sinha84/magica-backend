@@ -1,0 +1,44 @@
+---
+title: "Chat completions"
+description: "Use the agent from any chat-completions client."
+---
+
+[`POST /v1/chat/completions`](/api-reference/messages/create-a-chat-completion) takes the chat-completions format (as Magica's own LLM Gateway does), so clients that already speak it work unchanged. The agent answers through the free model router, so `model` must be `openrouter/free`.
+
+```bash
+curl -X POST "$MAGICA_API/v1/chat/completions" \
+  -H "Authorization: Bearer $MAGICA_API_KEY" -H "content-type: application/json" \
+  -d '{
+    "model": "openrouter/free",
+    "messages": [
+      {"role": "system", "content": "Reply in at most five words."},
+      {"role": "user", "content": "Say hi"}
+    ]
+  }'
+```
+
+```json ChatCompletion
+{
+  "id": "chatcmpl_cmurascl200073sitru4ahhah",
+  "object": "chat.completion",
+  "created": 1790965789,
+  "model": "cohere/north-mini-code:free",
+  "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hi!" }, "finish_reason": "stop" }],
+  "usage": { "prompt_tokens": 1620, "completion_tokens": 108, "total_tokens": 1728 },
+  "run_id": "cmurascl200073sitru4ahhah"
+}
+```
+
+## How it works
+
+- The conversation is kept as a chat (it appears in the app). System and developer messages become instructions at its start.
+- It's the same agent: it can use its tools, and they cost credits as usual. `run_id` leads to the full run (`GET /v1/runs/{run_id}`).
+- It waits about a minute for the answer. If it takes longer, you get `202` with the run to poll:
+
+```json ChatCompletionPending
+{ "object": "chat.completion.pending", "run_id": "cmurascl200073sitru4ahhah", "chat_id": "cmurasckz00043sitzc3cq6b2", "status": "running" }
+```
+
+## Not supported
+
+Streaming (`stream: true`), your own `tools`, image content, and other models are refused with `400`. Other fields (`temperature`, `max_tokens`, …) are accepted and ignored.

@@ -249,6 +249,44 @@ describe("the URL guard", () => {
   });
 });
 
+describe("files the user attached", () => {
+  const ATTACHED = "https://pub-test.r2.dev/ws/asm/photo.png";
+  async function attach(userId: string, messageId: string, expiresAt: Date) {
+    const asset = await prisma.mediaAsset.create({ data: { userId, source: "UPLOAD", type: "IMAGE", url: ATTACHED, name: "photo.png", expiresAt } });
+    await prisma.attachment.create({ data: { messageId, mediaAssetId: asset.id, position: 0 } });
+  }
+
+  it("are in the question the model reads, and its tools can use them", async () => {
+    const server = await magica([completed("crop")]);
+    const { user, turn, payload } = await setup({ question: "Crop my photo to the top half" });
+    await attach(user.id, turn.run.triggerMessageId, new Date(Date.now() + 3_600_000));
+    const { result, model } = await run(
+      payload,
+      [[toolCall("crop_image", { image_url: ATTACHED, crop: { x: 0, y: 0, width: 100, height: 50 } }, "CropFile1"), finished()], [text("Cropped."), finished()]],
+      { magicaUrl: server.url },
+    );
+    expect(result).toBe("completed");
+    const question = model.calls[0]?.messages.at(-1);
+    expect(question?.role === "user" && question.content).toBe(`Crop my photo to the top half\n[Attached image: ${ATTACHED}]`);
+    expect(server.requests.find((r) => r.method === "POST")?.body).toMatchObject({ input: { image_url: ATTACHED } });
+  });
+
+  it("refuses the link of a file that has expired: it isn't in the conversation any more", async () => {
+    const server = await magica([completed("crop")]);
+    const { user, turn, payload } = await setup({ question: "Crop my photo" });
+    await attach(user.id, turn.run.triggerMessageId, new Date(Date.now() - 1_000));
+    const { model } = await run(
+      payload,
+      [[toolCall("crop_image", { image_url: ATTACHED, crop: { x: 0, y: 0, width: 100, height: 50 } }, "CropGone1"), finished()], [text("That file expired."), finished()]],
+      { magicaUrl: server.url },
+    );
+    const question = model.calls[0]?.messages.at(-1);
+    expect(question?.role === "user" && question.content).toBe("Crop my photo\n[Attached image (expired)]");
+    expect(JSON.parse((model.calls[1]?.messages.at(-1) as { content: string }).content)).toEqual({ error: `This link doesn't appear in the conversation: ${ATTACHED}. Use the exact link from the conversation.` });
+    expect(server.count("POST")).toBe(0);
+  });
+});
+
 describe("limits", () => {
   it("stops at the step limit with a clear failure, keeping what it did", async () => {
     const { turn, payload } = await setup();
@@ -397,7 +435,7 @@ describe("the stale-run rule with tools", () => {
     const user = await fixtures.user({ id: "u1" });
     const chat = await fixtures.chat(user.id);
     const turn = await activeTurn(chat.id, user.id, { status: "RUNNING", triggerRunId: "run_long", ageMs: MAX_RUN_MS + 60_000, quietMs: 60_000, startedAt: new Date(Date.now() - MAX_RUN_MS - 60_000) });
-    await prisma.toolInvocation.create({ data: { agentRunId: turn.run.id, toolCallId: "s1-x", toolName: "gpt_image_2", input: {}, status: "RUNNING", dispatchedAt: new Date(Date.now() - dispatchedAgoMs), magicaRunId: "mg" } });
+    await prisma.toolInvocation.create({ data: { userId: user.id, agentRunId: turn.run.id, toolCallId: "s1-x", toolName: "gpt_image_2", input: {}, status: "RUNNING", dispatchedAt: new Date(Date.now() - dispatchedAgoMs), magicaRunId: "mg" } });
     return turn;
   }
 
@@ -518,6 +556,15 @@ describe("thinking time and media placeholders", () => {
     expect(saved.blocks.some((b) => b.type === "image" && b.url === IMG)).toBe(true); // the real media stays
   });
 
+  it("removes copied [Attached …] lines too, including the expired form", async () => {
+    const server = await magica([completed("gpt_text")]);
+    const { turn, payload } = await setup({ question: "Draw a fox" });
+    await run(payload, [[toolCall("gpt_image_2", { mode: "text", prompt: "A fox" }, "Echo00003"), finished()], [text(`Cropped it.\n[Attached image: ${IMG}]\nThe other one: [Attached video (expired)] is gone.`), finished()]], { magicaUrl: server.url });
+    const saved = await reply(turn.assistantMessage.id);
+    expect(saved.content).toBe("Cropped it.\n\nThe other one: is gone.");
+    expect(saved.content).not.toContain("[Attached");
+  });
+
   it("drops a text block that was only a placeholder", async () => {
     const server = await magica([completed("gpt_text")]);
     const { turn, payload } = await setup({ question: "Draw a fox" });
@@ -528,6 +575,6 @@ describe("thinking time and media placeholders", () => {
   it("tells the model not to write those lines", async () => {
     const { systemPrompt } = await import("#src/agent/prompt.js");
     const prompt = systemPrompt(new Date(0), { skills, tools: agentTools.functions().map((f) => ({ name: f.function.name, description: f.function.description })) });
-    expect(prompt).toMatch(/Never write those \[Generated …\] lines in your reply/);
+    expect(prompt).toMatch(/Never write those \[Generated …\], \[Attached …\] or \[Plan …\] lines in your reply/);
   });
 });

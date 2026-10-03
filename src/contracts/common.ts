@@ -10,9 +10,12 @@ export const ErrorCodeSchema = z.enum([
   "NOT_FOUND", // 404 (also used for other users' resources, so nothing leaks)
   "RUN_ACTIVE", // 409: the chat already has a run in flight
   "RUN_NOT_RETRYABLE", // 409: only the latest turn of a chat can be retried, and only if it failed or was stopped
+  "API_KEY_LIMIT_REACHED", // 409: the user already has the most active API keys allowed (revoke one first)
+  "IDEMPOTENCY_CONFLICT", // 409: that Idempotency-Key was used for a different request, or its request is still running
   "INSUFFICIENT_CREDITS", // 402
   "PAYLOAD_TOO_LARGE", // 413
   "RATE_LIMITED", // 429
+  "UPLOAD_LIMIT_REACHED", // 429: the app's monthly upload allowance is used up (it resets on the 1st)
   "SERVICE_UNAVAILABLE", // 503
   "INTERNAL_ERROR", // 500
 ]);

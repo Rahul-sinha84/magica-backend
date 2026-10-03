@@ -1,0 +1,24 @@
+---
+title: "Idempotency"
+description: "Retry requests that start work without starting it twice."
+---
+
+Networks fail. To retry safely, send an `Idempotency-Key` header with anything that starts work: [`POST /v1/messages`](/api-reference/messages/send-a-message), [`/v1/chat/completions`](/api-reference/messages/create-a-chat-completion) and the [tool runs](/concepts/tools).
+
+```bash
+curl -X POST "$MAGICA_API/v1/messages" \
+  -H "x-api-key: $MAGICA_API_KEY" -H "content-type: application/json" \
+  -H "Idempotency-Key: order-42" \
+  -d '{"content": "Summarise order 42"}'
+```
+
+| You send the same key… | You get |
+| --- | --- |
+| with the same body, after the first finished (within 24 hours) | the first answer again, and the header `idempotent-replayed: true`. No second run. |
+| with a different body | `409 IDEMPOTENCY_CONFLICT` |
+| while the first is still being handled | `409 IDEMPOTENCY_CONFLICT`: try again in a moment |
+| after the first request failed | a fresh attempt: a failed request doesn't hold on to its key |
+
+- A key is 1 to 255 visible ASCII characters. Use something unique per piece of work (an order id, a UUID).
+- Keys are per user and per endpoint: the same key on another endpoint is a different request.
+- After 24 hours a key can be used again.

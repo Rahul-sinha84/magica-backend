@@ -1,0 +1,26 @@
+---
+title: "Credits"
+description: "What costs credits, and how charges are settled."
+---
+
+The agent's model is free. **Magica's media tools cost credits**:
+
+| Tool | Credits per call |
+| --- | --- |
+| GPT Image 2 | 1,000,000 |
+| Merge Videos | 500,000 |
+| Crop Image | 200,000 |
+
+[`GET /v1/credits`](/api-reference/account/get-credits) shows your `balance` and how much of it is `held`.
+
+## Holds and settlement
+
+- When a run starts, a small amount is **held** so a run can't start without credits. It's released when the run ends.
+- Before a tool runs, its price is **reserved**. If the tool completes, the reservation becomes a **charge**, exactly once, even if parts of the system retry. If the tool fails, is stopped, or the run ends first, the reservation is given back.
+- A run reports what its tools cost in `usage.credits`; each tool call has its own `credits`.
+
+## Running out
+
+- If a run can't be started for lack of credits: `402 INSUFFICIENT_CREDITS`, and nothing is created.
+- If a tool can't be paid for mid-run, the run stops with `INSUFFICIENT_CREDITS` and keeps what it finished.
+- Spends above the approval threshold wait for your OK first. See [Plan mode and approvals](/concepts/plan-mode#spend-approval).

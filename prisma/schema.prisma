@@ -1,9 +1,15 @@
-// Core tables. Attachment and Waitpoint arrive later as additive migrations.
+// Core tables.
+// The pg_trgm extension (for the search indexes) is created by the chat_search migration.
 //
 // Constraints Prisma cannot express live as raw SQL at the end of the init migration:
 //   - AgentRun_one_active_per_chat: partial unique index (one PENDING/RUNNING run per chat)
 //   - User_credits_valid: CHECK (balance >= 0 AND held >= 0 AND held <= balance)
 //   - CreditLedger_amount_nonzero: CHECK (amount <> 0)
+// and at the end of the api_keys migration:
+//   - ApiKey_limits_valid, ApiKey_label_valid, ApiKey_hash_hex, ApiKey_prefix_valid: CHECKs
+// and at the end of the waitpoints migration:
+//   - Waitpoint_one_pending_per_run: partial unique index (one PENDING waitpoint per run)
+//   - Waitpoint_resolved_when_closed, Waitpoint_response_when_answered, Waitpoint_expires_after_creation: CHECKs
 
 generator client {
   provider            = "prisma-client"
@@ -28,6 +34,12 @@ model User {
   messages     Message[]
   agentRuns    AgentRun[]
   creditLedger CreditLedger[]
+  uploads      Upload[]
+  mediaAssets  MediaAsset[]
+  apiKeys      ApiKey[]
+  idempotency  IdempotencyRecord[]
+  toolRuns     ToolInvocation[]
+  webhooks     WebhookEndpoint[]
 }
 
 model Chat {
@@ -44,6 +56,7 @@ model Chat {
   agentRuns AgentRun[]
 
   @@index([userId, isPinned(sort: Desc), lastMessageAt(sort: Desc), id(sort: Desc)])
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Chat_title_trgm_idx") // search (pg_trgm)
 }
 
 model Message {
@@ -58,13 +71,16 @@ model Message {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  chat          Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  triggeredRuns AgentRun[] @relation("TriggerMessage")
-  assistantRun  AgentRun?  @relation("AssistantMessage")
+  chat          Chat         @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggeredRuns AgentRun[]   @relation("TriggerMessage")
+  assistantRun  AgentRun?    @relation("AssistantMessage")
+  attachments   Attachment[]
 
   @@unique([chatId, clientMessageId]) // NULLs are distinct, so only client-supplied keys collide
   @@index([chatId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin, map: "Message_content_trgm_idx") // search (pg_trgm)
+  @@index([userId]) // search: a common term reads only the caller's messages, never everyone's
 }
 
 model AgentRun {
@@ -81,6 +97,7 @@ model AgentRun {
   inputTokens        Int?
   outputTokens       Int?
   traceId            String
+  mode               RunMode   @default(DEFAULT) // PLAN: paid tools wait for an approved plan; a retry keeps it
   // the failed or cancelled run this one retries; unique, so retrying the same run twice gives back the same retry
   retryOfRunId       String?   @unique
   startedAt          DateTime?
@@ -88,15 +105,17 @@ model AgentRun {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  chat             Chat             @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  triggerMessage   Message          @relation("TriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
-  assistantMessage Message          @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
-  retryOf          AgentRun?        @relation("Retries", fields: [retryOfRunId], references: [id], onDelete: SetNull)
-  retriedBy        AgentRun?        @relation("Retries")
+  chat             Chat                  @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  triggerMessage   Message               @relation("TriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
+  assistantMessage Message               @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  retryOf          AgentRun?             @relation("Retries", fields: [retryOfRunId], references: [id], onDelete: SetNull)
+  retriedBy        AgentRun?             @relation("Retries")
   loadedSkills     RunSkill[]
   toolInvocations  ToolInvocation[]
   creditLedger     CreditLedger[]
+  waitpoints       Waitpoint[]
+  webhooks         WebhookSubscription[]
 
   @@index([chatId, createdAt(sort: Desc)])
   @@index([triggerMessageId])
@@ -118,10 +137,12 @@ model RunSkill {
   @@unique([agentRunId, skillName])
 }
 
+// A paid tool call: made by the agent in a run, or run on its own through the public API (no run: agentRunId is null).
 model ToolInvocation {
   id           String               @id @default(cuid())
-  agentRunId   String
-  toolCallId   String // model-generated tool call id
+  userId       String // who pays for it
+  agentRunId   String? // the run that made the call; null for a standalone run through the public API
+  toolCallId   String // model-generated tool call id ("api" for a standalone run)
   toolName     String
   status       ToolInvocationStatus @default(PENDING)
   input        Json
@@ -136,9 +157,132 @@ model ToolInvocation {
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
 
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentRun    AgentRun?             @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  mediaAssets MediaAsset[]
+  webhooks    WebhookSubscription[]
+
+  @@unique([agentRunId, toolCallId]) // NULLs are distinct: standalone runs are never matched to each other
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+// A pause in a run until the user answers it: approving a plan, or a spend above the approval threshold. The run waits
+// on a Trigger.dev waitpoint token (it uses no worker while it waits); this row is the durable record, and it decides
+// every race between an answer, the expiry and a stop. At most one is pending per run.
+model Waitpoint {
+  id             String          @id @default(cuid())
+  agentRunId     String
+  type           WaitpointType
+  status         WaitpointStatus @default(PENDING)
+  triggerTokenId String          @unique // the Trigger.dev token the run waits on, created before this row
+  payload        Json // what is being approved (a plan, the calls and their costs); validated with Zod by type
+  response       Json? // the answer ({ action, feedback? }), once answered
+  expiresAt      DateTime // the token times out at the same moment
+  resolvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
   agentRun AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
 
-  @@unique([agentRunId, toolCallId])
+  @@index([agentRunId, createdAt])
+}
+
+// A key for the public API (/v1). Only its SHA-256 hash is stored: the key itself is shown once, when it is created.
+// `prefix` (the first characters) lets the user tell their keys apart. Revoking is final; an expired or revoked key
+// no longer works and doesn't count toward the 10 active keys a user may have.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  label      String
+  prefix     String // "mgc_" and the next 8 characters of the key
+  hash       String    @unique // sha256 of the whole key, lowercase hex
+  perMinute  Int       @default(60)
+  perDay     Int       @default(1000)
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+// A public-API request that started work under an Idempotency-Key: a repeat with the same body gets the stored answer
+// instead of starting the work again. PENDING while the first request is being handled; the answer is kept 24 hours.
+model IdempotencyRecord {
+  id             String            @id @default(cuid())
+  userId         String
+  scope          String // the endpoint, e.g. "POST /v1/messages": the same key may be used on different endpoints
+  key            String
+  requestHash    String // sha256 of the request body, to tell a repeat from a different request
+  status         IdempotencyStatus @default(PENDING)
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, key])
+  @@index([createdAt])
+}
+
+// A destination a user sends webhooks to: one per (user, URL), with its own signing secret, so the same destination
+// always gets the same secret back (as the reference does). The secret is stored encrypted (AES-256-GCM).
+model WebhookEndpoint {
+  id              String   @id @default(cuid())
+  userId          String
+  url             String
+  secretEncrypted String // "v1:<iv>:<tag>:<ciphertext>" (see src/lib/webhookSigning.ts)
+  createdAt       DateTime @default(now())
+
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions WebhookSubscription[]
+
+  @@unique([userId, url])
+}
+
+// One start's request for webhooks (POST /v1/messages, a tool run, a completion): which events, sent where, with what
+// metadata echoed back. It belongs to an agent run or to a standalone tool run, never both.
+model WebhookSubscription {
+  id               String   @id @default(cuid())
+  endpointId       String
+  agentRunId       String?
+  toolInvocationId String?
+  events           String[]
+  metadata         Json?
+  createdAt        DateTime @default(now())
+
+  endpoint       WebhookEndpoint   @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  agentRun       AgentRun?         @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  toolInvocation ToolInvocation?   @relation(fields: [toolInvocationId], references: [id], onDelete: Cascade)
+  deliveries     WebhookDelivery[]
+
+  @@index([agentRunId])
+  @@index([toolInvocationId])
+}
+
+// One event to send to one subscription: written in the same transaction as the change it reports, then sent by the
+// deliver-webhook task (with retries). Unique per (subscription, event), so an event is never sent twice.
+model WebhookDelivery {
+  id             String                @id @default(cuid())
+  subscriptionId String
+  eventId        String // what makes it the same event: "agent.started", or "tool.completed:<tool call id>"
+  type           String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, eventId])
+  @@index([status, createdAt])
 }
 
 // Signed amount, from the point of view of the counter it changes:
@@ -160,6 +304,90 @@ model CreditLedger {
 
   @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([agentRunId])
+}
+
+// A direct upload through Transloadit, one assembly per file. Created (PENDING) when the browser asks for a signed
+// upload; completed or failed once Transloadit reports back. The finished file becomes a MediaAsset.
+model Upload {
+  id           String       @id @default(cuid())
+  userId       String
+  assemblyId   String?      @unique // Transloadit's assembly id, known once the upload has finished
+  status       UploadStatus @default(PENDING)
+  originalName String // cleaned of control characters
+  mimeType     String // as declared when signing; Transloadit's detected type is checked on completion
+  sizeBytes    Int // as declared when signing; replaced by Transloadit's measured size on completion
+  errorMessage String? // user-safe
+  mediaAssetId String?      @unique
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaAsset MediaAsset? @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt(sort: Desc)])
+  @@index([createdAt]) // the monthly allowance adds up this month's uploads
+}
+
+// A file in the user's media library: one they uploaded (lives on Transloadit's temporary storage, so it expires) or
+// one the agent generated (lives on Magica's CDN, no expiry). Messages refer to these through Attachment.
+model MediaAsset {
+  id               String      @id @default(cuid())
+  userId           String
+  source           MediaSource
+  type             MediaType
+  url              String
+  expiresAt        DateTime? // uploads only; null for generated media
+  name             String? // the file name, for uploads
+  prompt           String? // what the agent was asked to make, for generated media
+  model            String? // the model that made it, for generated media
+  width            Int?
+  height           Int?
+  mimeType         String?
+  toolInvocationId String? // the tool call that generated it
+  createdAt        DateTime    @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  toolInvocation ToolInvocation? @relation(fields: [toolInvocationId], references: [id], onDelete: SetNull)
+  upload         Upload?
+  attachments    Attachment[]
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([userId, source, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([toolInvocationId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "MediaAsset_name_trgm_idx") // library search
+  @@index([prompt(ops: raw("gin_trgm_ops"))], type: Gin, map: "MediaAsset_prompt_trgm_idx") // library search
+}
+
+// A message's files, in the order they were attached (the order matters to the model).
+model Attachment {
+  id           String @id @default(cuid())
+  messageId    String
+  mediaAssetId String
+  position     Int // 0-based, the order shown and given to the model
+
+  message    Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  mediaAsset MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, position])
+  @@unique([messageId, mediaAssetId]) // the same file twice in one message is refused
+  @@index([mediaAssetId])
+}
+
+enum UploadStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum MediaSource {
+  UPLOAD
+  GENERATED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
 }
 
 enum MessageRole {
@@ -190,6 +418,36 @@ enum ToolInvocationStatus {
   RUNNING
   COMPLETED
   FAILED
+  CANCELLED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+enum IdempotencyStatus {
+  PENDING
+  DONE
+}
+
+enum RunMode {
+  DEFAULT
+  PLAN
+}
+
+enum WaitpointType {
+  PLAN
+  CREDIT
+}
+
+enum WaitpointStatus {
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+  EXPIRED
   CANCELLED
 }
 

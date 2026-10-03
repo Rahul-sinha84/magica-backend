@@ -1,7 +1,11 @@
+import type { AudioBlock, ImageBlock, VideoBlock } from "#src/contracts/index.js";
 import { prisma, Prisma } from "#src/db/client.js";
 import { AppError } from "#src/lib/errors.js";
 import { toolChargeKey, toolHoldKey, toolReleaseKey } from "#src/lib/idempotency.js";
 import { charge, hold, release } from "#src/services/credits.js";
+import { addGeneratedMedia } from "#src/services/media.js";
+import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
+import { recordToolEvent } from "#src/webhooks/events.js";
 
 type Tx = Prisma.TransactionClient;
 // JSONB holds plain JSON (undefined keys dropped, as the database would drop them)
@@ -23,7 +27,8 @@ export class InsufficientCreditsForTool extends AppError {
 }
 
 export interface NewInvocation {
-  agentRunId: string;
+  /** the run that made the call; null for a standalone run through the public API */
+  agentRunId: string | null;
   userId: string;
   toolCallId: string;
   toolName: string;
@@ -35,19 +40,21 @@ export interface NewInvocation {
 
 /**
  * Records a tool call and reserves its credits, together. The same (run, tool call) gives back the same invocation,
- * so asking twice never reserves twice. Short of credits: nothing is written and InsufficientCreditsForTool is thrown.
+ * so asking twice never reserves twice (a standalone run has no run: its repeats are caught by the public API's
+ * Idempotency-Key instead). Short of credits: nothing is written and InsufficientCreditsForTool is thrown.
  */
 export async function createInvocation(call: NewInvocation, db: typeof prisma = prisma) {
-  const existing = await db.toolInvocation.findUnique({ where: { agentRunId_toolCallId: { agentRunId: call.agentRunId, toolCallId: call.toolCallId } } });
+  const same = call.agentRunId === null ? null : { agentRunId_toolCallId: { agentRunId: call.agentRunId, toolCallId: call.toolCallId } };
+  const existing = same && (await db.toolInvocation.findUnique({ where: same }));
   if (existing) return existing;
   try {
     return await db.$transaction(async (tx) => {
       const invocation = await tx.toolInvocation.create({
-        data: { agentRunId: call.agentRunId, toolCallId: call.toolCallId, toolName: call.toolName, input: toJson(call.input), status: "PENDING" },
+        data: { userId: call.userId, agentRunId: call.agentRunId, toolCallId: call.toolCallId, toolName: call.toolName, input: toJson(call.input), status: "PENDING" },
       });
       if (call.creditCost > 0) {
         try {
-          await hold(tx, { userId: call.userId, amount: call.creditCost, reason: `tool ${call.toolName}`, idempotencyKey: toolHoldKey(invocation.id), agentRunId: call.agentRunId });
+          await hold(tx, { userId: call.userId, amount: call.creditCost, reason: `tool ${call.toolName}`, idempotencyKey: toolHoldKey(invocation.id), ...(call.agentRunId && { agentRunId: call.agentRunId }) });
         } catch (error) {
           if (error instanceof AppError && error.code === "INSUFFICIENT_CREDITS") throw new InsufficientCreditsForTool();
           throw error;
@@ -57,8 +64,8 @@ export async function createInvocation(call: NewInvocation, db: typeof prisma = 
     });
   } catch (error) {
     // the same call recorded at the same moment by a twin request: answer with that one
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return db.toolInvocation.findUniqueOrThrow({ where: { agentRunId_toolCallId: { agentRunId: call.agentRunId, toolCallId: call.toolCallId } } });
+    if (same && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return db.toolInvocation.findUniqueOrThrow({ where: same });
     }
     throw error;
   }
@@ -90,6 +97,8 @@ export interface Completion {
   output: unknown;
   durationMs: number;
   providerCost?: number | null;
+  /** what the call made; added to the user's media library in the same transaction */
+  assets?: readonly (ImageBlock | VideoBlock | AudioBlock)[];
 }
 
 /**
@@ -97,7 +106,8 @@ export interface Completion {
  * transaction as the status change. False when the call had already ended (cancelled meanwhile): nothing is charged.
  */
 export async function completeInvocation(invocationId: string, done: Completion, db: typeof prisma = prisma): Promise<boolean> {
-  return db.$transaction(async (tx) => {
+  const deliveries: string[] = [];
+  const completed = await db.$transaction(async (tx) => {
     const reserved = await heldFor(tx, invocationId);
     const { count } = await tx.toolInvocation.updateMany({
       where: { id: invocationId, status: { in: ["DISPATCHING", "RUNNING"] } },
@@ -117,8 +127,12 @@ export async function completeInvocation(invocationId: string, done: Completion,
       await release(tx, { ...entry, reason: "tool reservation settled", idempotencyKey: toolReleaseKey(invocationId) });
       await charge(tx, { ...entry, reason: "tool call", idempotencyKey: toolChargeKey(invocationId) });
     }
+    if (done.assets?.length) await addGeneratedMedia(tx, invocationId, done.assets);
+    deliveries.push(...(await recordToolEvent(tx, invocationId, "tool.completed")));
     return true;
   });
+  if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
+  return completed;
 }
 
 /**
@@ -126,7 +140,10 @@ export async function completeInvocation(invocationId: string, done: Completion,
  * it had already ended. `errorMessage` must be safe to show.
  */
 export async function endInvocation(invocationId: string, status: "FAILED" | "CANCELLED", errorMessage: string | null, db: typeof prisma = prisma): Promise<boolean> {
-  return db.$transaction((tx) => endInvocationIn(tx, invocationId, status, errorMessage));
+  const deliveries: string[] = [];
+  const ended = await db.$transaction((tx) => endInvocationIn(tx, invocationId, status, errorMessage, deliveries));
+  if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
+  return ended;
 }
 
 /**
@@ -141,7 +158,7 @@ export async function endActiveInvocations(tx: Tx, agentRunId: string, errorMess
   return ended;
 }
 
-async function endInvocationIn(tx: Tx, invocationId: string, status: "FAILED" | "CANCELLED", errorMessage: string | null): Promise<boolean> {
+async function endInvocationIn(tx: Tx, invocationId: string, status: "FAILED" | "CANCELLED", errorMessage: string | null, deliveries: string[] = []): Promise<boolean> {
   {
     const current = await tx.toolInvocation.findUnique({ where: { id: invocationId }, select: { dispatchedAt: true } });
     const { count } = await tx.toolInvocation.updateMany({
@@ -159,6 +176,8 @@ async function endInvocationIn(tx: Tx, invocationId: string, status: "FAILED" | 
     if (reserved) {
       await release(tx, { userId: reserved.userId, amount: reserved.amount, agentRunId: reserved.agentRunId ?? undefined, reason: `tool call ${status.toLowerCase()}`, idempotencyKey: toolReleaseKey(invocationId) });
     }
+    // a failure is news; a stop isn't (the run's own event says it ended)
+    if (status === "FAILED") deliveries.push(...(await recordToolEvent(tx, invocationId, "tool.failed")));
     return true;
   }
 }

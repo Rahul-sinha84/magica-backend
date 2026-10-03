@@ -5,13 +5,17 @@ import { loadConversation } from "#src/agent/context.js";
 import { describeFailure, TurnError } from "#src/agent/outcomes.js";
 import type { AgentTurnPayload, MagicaToolPayload } from "#src/agent/payload.js";
 import { withSystemPrompt, type PromptTools } from "#src/agent/prompt.js";
-import { linksIn, runToolStep } from "#src/agent/toolStep.js";
+import { linksIn, runToolStep, type Refusal } from "#src/agent/toolStep.js";
 import { logger } from "#src/lib/logger.js";
 import { ModelError, type ChatMessage, type ModelEvent, type StreamCallOptions, type ToolCallEvent } from "#src/lib/openrouter.js";
 import { finalizeRun, toJson } from "#src/services/runs.js";
 import { turnToolCost } from "#src/services/toolInvocations.js";
 import type { InvocationOutcome } from "#src/tools/magicaInvocation.js";
-import type { ToolRegistry } from "#src/tools/registry.js";
+import type { ToolDefinition, ToolRegistry } from "#src/tools/registry.js";
+import { PROPOSE_PLAN } from "#src/tools/planTools.js";
+import { createWaiter, planApproved, type WaitTokens } from "#src/waitpoints/wait.js";
+import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
+import { recordRunEvent } from "#src/webhooks/events.js";
 
 export type TurnResult = "completed" | "failed" | "cancelled" | "skipped";
 
@@ -38,6 +42,10 @@ export interface TurnTools {
   runMagicaCalls: (calls: MagicaToolPayload[]) => Promise<InvocationOutcome[]>;
   /** Model calls allowed in one turn. */
   maxSteps?: number;
+  /** Waitpoint tokens, for pausing until the user answers (plan approval, spend approval). Without them the turn can't wait. */
+  waitpoints?: WaitTokens;
+  /** A step whose paid calls cost more than this asks the user to approve the spend. Absent: never asked. */
+  creditApprovalThreshold?: number;
 }
 
 /** A turn may call the model at most this many times (each step may use tools); then it stops with what it has. */
@@ -58,8 +66,12 @@ async function finishWithRetry(runId: string, outcome: Parameters<typeof finaliz
   }
 }
 
-/** The lines the history uses to tell the model about earlier media, e.g. "[Generated image: https://…]". */
-const MEDIA_PLACEHOLDER = /[ \t]*\[Generated (?:image|video|audio): [^\]\s]+\][ \t]*/g;
+/**
+ * The lines the history uses to tell the model about media: what was generated ("[Generated image: https://…]") and
+ * what the user attached ("[Attached video: https://…]", "[Attached image (expired)]"). Models sometimes copy them
+ * into their answer; the user already sees the media, so they are removed.
+ */
+const MEDIA_PLACEHOLDER = /[ \t]*\[(?:Generated|Attached) (?:image|video|audio)(?:: [^\]\s]+| \(expired\))\][ \t]*/g;
 
 /**
  * Models sometimes copy those lines into their answer, which would show users a raw link (the media itself is already
@@ -69,9 +81,54 @@ export function withoutMediaPlaceholders(blocks: ContentBlock[]): ContentBlock[]
   return blocks.flatMap((block) => {
     if (block.type !== "text" || !MEDIA_PLACEHOLDER.test(block.content)) return [block];
     MEDIA_PLACEHOLDER.lastIndex = 0;
-    const content = block.content.replace(MEDIA_PLACEHOLDER, "").replace(/\n{3,}/g, "\n\n").trim();
+    // between two words a removed placeholder leaves one space, so they don't run together; elsewhere it leaves nothing
+    const content = block.content
+      .replace(MEDIA_PLACEHOLDER, (match: string, offset: number, text: string) => {
+        const before = text[offset - 1];
+        const after = text[offset + match.length];
+        return before !== undefined && after !== undefined && before !== "\n" && after !== "\n" ? " " : "";
+      })
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
     return content ? [{ ...block, content }] : [];
   });
+}
+
+/**
+ * The tools a step may not run, and why (the model reads the reason and can act on it). In plan mode nothing that costs
+ * credits runs before the user has approved a plan (such an attempt leaves no card), and only one plan is proposed at a
+ * time; outside plan mode there are no plans to propose. A new set of rules per step: it remembers the plan proposed earlier in the same step.
+ */
+function turnRules(planMode: boolean, approved: boolean): (tool: ToolDefinition) => Refusal | null {
+  let proposed = false;
+  // the tool card speaks to the user; the model is told what to do instead
+  return (tool) => {
+    if (tool.name === PROPOSE_PLAN) {
+      if (!planMode) return { message: "Plans are only used in plan mode.", forModel: "propose_plan is only for plan mode. Do what the user asked directly." };
+      if (proposed) return { message: "Only one plan at a time.", forModel: "Propose one plan at a time, and wait for the answer to it." };
+      proposed = true;
+      return null;
+    }
+    if (planMode && !approved && tool.creditCost > 0) {
+      // the model jumped ahead of the plan: the user never sees the attempt (nothing ran, nothing was charged)
+      return {
+        message: "Not run: plan mode needs an approved plan first.",
+        forModel: `Plan mode: propose a plan with propose_plan and wait for the user to approve it before using ${tool.name}.`,
+        hidden: true,
+      };
+    }
+    return null;
+  };
+}
+
+/** Sends agent.started to the run's webhooks. Never fails the turn: a missed event is logged (and in the outbox). */
+async function announceStart(runId: string): Promise<void> {
+  try {
+    const deliveries = await prisma.$transaction((tx) => recordRunEvent(tx, runId, "agent.started"));
+    if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
+  } catch (err) {
+    logger.warn({ err }, "could not record the run's started event");
+  }
 }
 
 const withThinkingTime = (blocks: ContentBlock[], ms: number | undefined): ContentBlock[] => {
@@ -114,6 +171,7 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
     logger.warn("the run is gone or no longer pending; nothing to do");
     return "skipped";
   }
+  await announceStart(runId);
   logger.info("agent turn started");
   setStatus({ status: "thinking" });
 
@@ -147,16 +205,36 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
   };
 
   try {
-    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { triggerMessageId: true } });
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { triggerMessageId: true, mode: true } });
+    const planMode = run.mode === "PLAN";
     const history = await loadConversation(chatId, run.triggerMessageId);
     if (history.length === 0) throw new TurnError("CONTEXT_EMPTY", "I couldn't find your message. Please send it again.");
     const tools = deps.tools;
-    const offered = tools?.registry.functions() ?? [];
+    // propose_plan is only offered in plan mode
+    const offered = (tools?.registry.functions() ?? []).filter((tool) => planMode || tool.function.name !== PROPOSE_PLAN);
     const promptTools: PromptTools | undefined = tools && { skills: tools.skills, tools: offered.map((t) => ({ name: t.function.name, description: t.function.description })) };
-    const messages: ChatMessage[] = withSystemPrompt(history, new Date(now()), promptTools);
+    const messages: ChatMessage[] = withSystemPrompt(history, new Date(now()), promptTools, planMode ? "plan" : "default");
     // the only links a tool may use: ones that appear in the conversation, plus media the turn itself creates
     const knownUrls = new Set(history.flatMap((message) => linksIn(message.content)));
     const maxSteps = tools?.maxSteps ?? MAX_STEPS;
+    const waiter =
+      tools?.waitpoints &&
+      createWaiter({
+        runId,
+        tokens: tools.waitpoints,
+        emit: (chunk) => {
+          chunks.push(chunk);
+          emit(chunk);
+        },
+        checkpoint: async () => {
+          lastSave = now();
+          return save();
+        },
+        setStatus,
+        now,
+        log: logger,
+        signal: controller.signal,
+      });
 
     const usage = { model: null as string | null, inputTokens: 0, outputTokens: 0 };
     let announcedAnswer = false;
@@ -228,6 +306,8 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
       }
 
       usedTools = true;
+      const approved = planMode && (await planApproved(runId));
+      const refuse = turnRules(planMode, approved);
       const result = await runToolStep(calls, {
         registry: tools.registry,
         runMagicaCalls: tools.runMagicaCalls,
@@ -249,6 +329,10 @@ export async function runAgentTurn(payload: AgentTurnPayload, deps: TurnDeps): P
           lastSave = now();
           await save();
         },
+        ...(waiter && { waitFor: waiter }),
+        refuse,
+        // an approved plan covers the turn's spend
+        ...(tools.creditApprovalThreshold !== undefined && { spendApproval: { threshold: tools.creditApprovalThreshold, covered: approved } }),
       });
       if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("stopped", "AbortError");
       lastSave = now();

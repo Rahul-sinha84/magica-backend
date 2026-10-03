@@ -5,12 +5,16 @@ import { holdKey, releaseKey } from "#src/lib/idempotency.js";
 import { logger } from "#src/lib/logger.js";
 import { release } from "#src/services/credits.js";
 import { endActiveInvocations } from "#src/services/toolInvocations.js";
+import { dispatchWebhookDeliveries } from "#src/webhooks/dispatch.js";
+import { recordRunEvent } from "#src/webhooks/events.js";
 
 // Shared by the API and the Trigger.dev worker, so it must not import anything that only the server configures.
 
 type Tx = Prisma.TransactionClient;
 
 export const ACTIVE_STATUSES = ["PENDING", "RUNNING"] as const;
+/** The turn failed because nobody answered its waitpoint in time (see src/waitpoints/wait.ts). It can be retried. */
+export const WAITPOINT_EXPIRED = { code: "WAITPOINT_EXPIRED", message: "This approval expired. Send a new message to continue." } as const;
 /** A run that ended without an answer, which the user may try again (only the chat's latest turn; see retryRun). */
 export const RETRYABLE_STATUSES: readonly string[] = ["FAILED", "CANCELLED"];
 
@@ -29,7 +33,10 @@ export interface RunOutcome {
 // What the JSONB column will hold: plain JSON, with `undefined` keys dropped exactly as the database would drop them.
 export const toJson = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
-async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolean> {
+const RUN_EVENT = { COMPLETED: "agent.completed", FAILED: "agent.failed", CANCELLED: "agent.canceled" } as const;
+
+/** Ends the run; `deliveries` collects the webhook deliveries it records, to be sent once the transaction commits. */
+async function apply(tx: Tx, runId: string, outcome: RunOutcome, deliveries: string[] = []): Promise<boolean> {
   // The compare-and-set that makes every way of ending a run safe to race: only the first caller wins.
   const { count } = await tx.agentRun.updateMany({
     where: { id: runId, status: { in: [...ACTIVE_STATUSES] } },
@@ -47,6 +54,9 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
 
   // a run never ends with credits still reserved for its tools: any tool call still in progress is ended here, together
   await endActiveInvocations(tx, runId, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended.");
+  // nor with a question still open: an unanswered waitpoint closes with it (expired if that is why the run ended)
+  const waitpointEnd = outcome.errorCode === WAITPOINT_EXPIRED.code ? "EXPIRED" : "CANCELLED";
+  await tx.waitpoint.updateMany({ where: { agentRunId: runId, status: "PENDING" }, data: { status: waitpointEnd, resolvedAt: new Date() } });
 
   const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId }, select: { assistantMessageId: true, userId: true, chatId: true } });
 
@@ -54,7 +64,7 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
   if (outcome.status !== "COMPLETED") {
     // a tool can't still be running in a reply that has ended: close any open tool card, so none spins forever
     const current = blocks ?? ContentBlocksSchema.parse((await tx.message.findUnique({ where: { id: run.assistantMessageId }, select: { contentBlocks: true } }))?.contentBlocks ?? []);
-    const closed = closeOpenTools(current, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended.");
+    const closed = closeOpenWaitpoints(closeOpenTools(current, outcome.status === "CANCELLED" ? "Stopped." : "Stopped because the turn ended."), waitpointEnd === "EXPIRED" ? "expired" : "cancelled");
     if (closed !== current) blocks = closed;
   }
   await tx.message.update({
@@ -75,6 +85,7 @@ async function apply(tx: Tx, runId: string, outcome: RunOutcome): Promise<boolea
   }
 
   if (outcome.status === "COMPLETED") await tx.chat.update({ where: { id: run.chatId }, data: { lastMessageAt: new Date() } });
+  deliveries.push(...(await recordRunEvent(tx, runId, RUN_EVENT[outcome.status])));
   return true;
 }
 
@@ -91,15 +102,24 @@ export function closeOpenTools(blocks: ContentBlock[], reason: string): ContentB
   });
 }
 
+/** Marks every waitpoint card still waiting for an answer as `status`. Returns the same array when none was waiting. */
+export function closeOpenWaitpoints(blocks: ContentBlock[], status: "expired" | "cancelled"): ContentBlock[] {
+  if (!blocks.some((b) => b.type === "waitpoint" && b.status === "pending")) return blocks;
+  return blocks.map((block) => (block.type === "waitpoint" && block.status === "pending" ? { ...block, status } : block));
+}
+
 /**
  * The single way a run ends: the task finishing, failing or being cancelled, the stale-run cleanup, a chat being
  * deleted, a dispatch that never happened. In one transaction it moves the run to its final state, finalises the reply
  * message, and releases the credit hold. Returns false (and changes nothing) if the run had already ended.
  */
 export async function finalizeRun(runId: string, outcome: RunOutcome, tx?: Tx): Promise<boolean> {
-  if (tx) return apply(tx, runId, outcome); // the caller's transaction decides whether this sticks, so it logs
-  const ended = await prisma.$transaction((t) => apply(t, runId, outcome));
+  // the caller's transaction decides whether this sticks, so it logs (its webhooks are sent by the outbox sweeper)
+  if (tx) return apply(tx, runId, outcome);
+  const deliveries: string[] = [];
+  const ended = await prisma.$transaction((t) => apply(t, runId, outcome, deliveries));
   if (ended) logger.info({ runId, status: outcome.status, errorCode: outcome.errorCode }, "run ended");
+  if (deliveries.length > 0) await dispatchWebhookDeliveries(deliveries);
   return ended;
 }
 

@@ -216,6 +216,85 @@ describe("retrying: only while nothing has reached the user", () => {
     expect(slept).toEqual([500, 1000]); // two waits between three tries
   });
 
+  // the body OpenRouter really sends when the free route's per-account daily allowance is used up (captured 2026-10-01)
+  const dailyLimitBody = {
+    error: {
+      message: "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day",
+      code: 429,
+      metadata: {
+        headers: { "X-RateLimit-Limit": "50", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790899200000" },
+        limit_source: "openrouter_free_tier_daily",
+        provider_name: null,
+      },
+    },
+  };
+
+  it("gives up at once on the free daily limit: no retries, its own failure", async () => {
+    const { stream, server, slept } = await setup([status(429, { "x-ratelimit-reset": "1790899200000" }, dailyLimitBody), answer(["never reached"])]);
+    const error = await failure(stream(conversation));
+    expect(error).toMatchObject({ failure: "DAILY_LIMIT", retryable: false });
+    expect(server.requests).toHaveLength(1);
+    expect(slept).toEqual([]);
+    expect(FAILURE_INFO.DAILY_LIMIT).toEqual({ code: "MODEL_DAILY_LIMIT", message: "The free model's daily limit is reached. It resets at 00:00 UTC." });
+  });
+
+  it("recognises the daily limit by its reason alone, and by its message alone", async () => {
+    const bySource = { error: { message: "Rate limit exceeded", code: 429, metadata: { limit_source: "openrouter_free_tier_daily" } } };
+    const byMessage = { error: { message: "Rate limit exceeded: free-models-per-day", code: 429 } };
+    for (const body of [bySource, byMessage]) {
+      const { stream, server } = await setup([status(429, {}, body), answer(["never reached"])]);
+      expect(await failure(stream(conversation))).toMatchObject({ failure: "DAILY_LIMIT" });
+      expect(server.requests).toHaveLength(1);
+    }
+  });
+
+  it("still treats an ordinary 429 (another limit, or an odd body) as a busy model worth retrying", async () => {
+    const otherLimit = { error: { message: "Rate limit exceeded: free-models-per-min", code: 429, metadata: { limit_source: "openrouter_free_tier_minute" } } };
+    for (const body of [otherLimit, { error: "not an object" }, {}]) {
+      const { stream, server } = await setup([status(429, {}, body), answer(["ok"])]);
+      expect(text(await collect(stream(conversation)))).toBe("ok");
+      expect(server.requests).toHaveLength(2);
+    }
+  });
+
+  it("gives up at once on a daily limit reported inside the stream before any text", async () => {
+    const { stream, server } = await setup([
+      (_req, res) => {
+        startSse(res);
+        writeEvent(res, chunk({ error: { code: 429, message: "Rate limit exceeded: free-models-per-day" }, finish: "error" }));
+        writeEvent(res, "[DONE]");
+        res.end();
+      },
+      answer(["never reached"]),
+    ]);
+    expect(await failure(stream(conversation))).toMatchObject({ failure: "DAILY_LIMIT" });
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it("keeps what was written when a daily limit arrives after text (an interrupted answer, never retried)", async () => {
+    const { stream, server } = await setup([
+      (_req, res) => {
+        startSse(res);
+        writeEvent(res, chunk({ content: "partial " }));
+        writeEvent(res, chunk({ error: { code: 429, message: "Rate limit exceeded: free-models-per-day" }, finish: "error" }));
+        res.end();
+      },
+      answer(["never reached"]),
+    ]);
+    const events: ModelEvent[] = [];
+    const error = await failure(
+      (async function* () {
+        for await (const event of stream(conversation)) {
+          events.push(event);
+          yield event;
+        }
+      })(),
+    );
+    expect(text(events)).toBe("partial ");
+    expect(error).toMatchObject({ failure: "INTERRUPTED" });
+    expect(server.requests).toHaveLength(1);
+  });
+
   it.each([500, 502, 503, 504])("retries a %i and recovers", async (code) => {
     const { stream, server } = await setup([status(code), answer(["back"])]);
     expect(text(await collect(stream(conversation)))).toBe("back");

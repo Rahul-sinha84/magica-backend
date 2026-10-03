@@ -124,16 +124,17 @@ export async function runMagicaInvocation(invocationId: string, deps: Invocation
     return end("FAILED", `${tool.magica.label} returned an unexpected result.`);
   }
   const durationMs = dispatchedAt === null ? 0 : now() - dispatchedAt;
-  const settled = await withRetries(() => completeInvocation(invocationId, { output: output.data, durationMs, providerCost: result.run.creditUsed ?? null }, db), log, "save the finished tool call");
+  const assets = tool.assets?.(output.data, input.data) ?? [];
+  const settled = await withRetries(() => completeInvocation(invocationId, { output: output.data, durationMs, providerCost: result.run.creditUsed ?? null, assets }, db), log, "save the finished tool call");
   if (!settled) {
     // Nothing changed: either the call was ended meanwhile (stopped: not charged, result not used), or an earlier save
     // attempt did commit and only its reply was lost (completed and charged). Report what the database says.
     const current = await db.toolInvocation.findUnique({ where: { id: invocationId }, select: { status: true, errorMessage: true, durationMs: true } });
-    if (current?.status === "COMPLETED") return { status: "COMPLETED", output: output.data, assets: tool.assets?.(output.data, input.data) ?? [], durationMs: current.durationMs ?? durationMs };
+    if (current?.status === "COMPLETED") return { status: "COMPLETED", output: output.data, assets, durationMs: current.durationMs ?? durationMs };
     return { status: current?.status === "FAILED" ? "FAILED" : "CANCELLED", message: current?.errorMessage ?? STOPPED };
   }
   log.info({ invocationId, tool: tool.name, durationMs, providerCost: result.run.creditUsed }, "tool call completed");
-  return { status: "COMPLETED", output: output.data, assets: tool.assets?.(output.data, input.data) ?? [], durationMs };
+  return { status: "COMPLETED", output: output.data, assets, durationMs };
 }
 
 class AlreadyTaken extends Error {}
