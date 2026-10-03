@@ -4,7 +4,7 @@ The API and agent worker behind the Magica clone (work trial). An Express + Type
 
 - **Frontend:** [`magica-frontend`](https://github.com/Rahul-sinha84/magica-frontend) (Next.js), expected next to this repo as `../magica-frontend`.
 - **Build plan and every decision:** [Day 1](https://github.com/Rahul-sinha84/magica-backend/issues/1), [Day 2](https://github.com/Rahul-sinha84/magica-backend/issues/2), [Day 3](https://github.com/Rahul-sinha84/magica-backend/issues/3).
-- **Deployed API:** `https://magica-backend-production.up.railway.app`.
+- **Deployed app:** `https://magica-frontend-eight.vercel.app`; API: `https://magica-backend-production.up.railway.app`.
 - **Public API docs:** Mintlify, from [`docs/`](docs). Run them locally with `pnpm docs:dev`.
 
 **Stack:** Node 22.12+ (developed on 26), pnpm 11, TypeScript (strict, ESM), Express 5, PostgreSQL 16 + Prisma 7 (driver adapter), Clerk, Trigger.dev v4, OpenRouter (`openrouter/free` only), the Magica model API, Transloadit, Zod 4, pino, Vitest, Mintlify.
@@ -240,7 +240,7 @@ While it runs, the run's metadata follows the required status model: `thinking` 
 - **Tool inputs are checked against what the conversation contains.** A tool may only use links that appear in the conversation or that a tool produced, so the model can't invent a URL. The stored and displayed input is sanitized.
 
 ### Waitpoints (plan and spend approval)
-- **Native waitpoint tokens plus a database row.** The turn waits with Trigger.dev's `wait.createToken` / `wait.forToken` (SDK 4.6.4). The wait doesn't count against the task's time limit, and a deployed worker checkpoints the run while it waits.
+- **Native waitpoint tokens plus a database row.** The turn waits with Trigger.dev's `wait.createToken` / `wait.forToken` (SDK 4.6.4). The wait doesn't count against the task's time limit, and a deployed worker checkpoints the run while it waits, so it uses no environment concurrency (checked on production).
 - **The `Waitpoint` row is the durable record.** Answering takes a row lock, checks the expiry and completes the token in one step, so a double click, two tabs, or an answer racing the expiry can't both win.
 - **One generic mechanism, two types.** Plan approval and credit approval share it. A new type is a payload schema and a decision rule.
 - **The model and the user are told different things.** When a paid tool is refused (no approved plan, or the spend was declined), the user's card says why in their terms, while the model gets wording that stops it retrying.
@@ -420,7 +420,7 @@ Connect Mintlify's GitHub app to this repo, with the docs folder set to `docs` a
 - **Chat completions are lean.** They take only `openrouter/free`, no streaming, and text in and out.
 - **Webhooks have no management API.** There's no delivery list, replay or secret rotation; a secret is per user and URL.
 - **Skills have no versions.** Skills are files in the repo. A run pins the text it loaded, but there's no version history or per-user choice.
-- **Waiting runs in development.** In `trigger dev`, a run waiting for an approval keeps its concurrency slot (dev doesn't checkpoint). Deployed workers checkpoint waiting runs, which should free the slot; this is checked on the deployed worker.
+- **Waiting runs and the agent queue.** On the deployed worker, a run waiting for an approval is checkpointed and uses no environment concurrency. The `agent-turn` queue still counts it, though, so 20 plans left waiting at once (`AGENT_CONCURRENCY_LIMIT`) would hold new turns in the queue until they're answered or expire (30 minutes). In `trigger dev`, a waiting run also keeps its slot, because dev doesn't checkpoint.
 
 ## What I'd do with more time
 
